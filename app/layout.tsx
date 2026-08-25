@@ -19,11 +19,11 @@ export const metadata: Metadata = {
     default: "wekingchen — AI 工程师 × 投资思考者",
     template: "%s | wekingchen",
   },
-  description: "14 年算法实战，从推荐系统到运筹优化，从大模型应用到全栈产品交付。",
+  description: "7 年算法实战，从推荐系统到运筹优化，从大模型应用到全栈产品交付。",
   keywords: ["AI 工程师", "推荐系统", "运筹优化", "大模型应用", "算法创新", "全栈开发"],
   openGraph: {
     title: "wekingchen — AI 工程师 × 投资思考者",
-    description: "14 年算法实战，从推荐系统到运筹优化，从大模型应用到全栈产品交付。",
+    description: "7 年算法实战，从推荐系统到运筹优化，从大模型应用到全栈产品交付。",
     url: "https://wekingchen.com",
     siteName: "wekingchen",
     locale: "zh_CN",
@@ -32,7 +32,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "wekingchen — AI 工程师 × 投资思考者",
-    description: "14 年算法实战，从推荐系统到运筹优化，从大模型应用到全栈产品交付。",
+    description: "7 年算法实战，从推荐系统到运筹优化，从大模型应用到全栈产品交付。",
   },
 };
 

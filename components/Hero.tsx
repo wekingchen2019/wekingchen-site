@@ -36,7 +36,7 @@ export function Hero() {
 
           {/* Description */}
           <p className="mt-6 max-w-xl text-lg leading-relaxed text-muted-foreground md:text-xl">
-            14 年算法实战，从推荐系统到运筹优化，从大模型应用到全栈产品交付。
+            7 年算法实战，从推荐系统到运筹优化，从大模型应用到全栈产品交付。
             <br className="hidden md:block" />
             擅长从业务本质出发，设计创新算法解决方案。
           </p>

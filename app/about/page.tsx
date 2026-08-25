@@ -3,7 +3,7 @@ import { SkillRadar } from "@/components/SkillRadar";
 
 export const metadata: Metadata = {
   title: "关于",
-  description: "14 年算法实战，从推荐系统到运筹优化，从大模型应用到全栈产品交付。",
+  description: "7 年算法实战，从推荐系统到运筹优化，从大模型应用到全栈产品交付。",
 };
 
 export default function AboutPage() {
@@ -20,7 +20,7 @@ export default function AboutPage() {
       <section className="mb-16">
         <div className="space-y-4 text-muted-foreground leading-relaxed">
           <p>
-            14 年算法实战经验，从量化交易到推荐系统，从运筹优化到大模型应用。
+            7 年算法实战经验，从推荐系统到运筹优化，从大模型应用到全栈产品交付。
             在推荐系统、路径规划（CVRPTW）、大模型 Agent 等方向均有实际落地成果。
           </p>
           <p>
