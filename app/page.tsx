@@ -11,6 +11,13 @@ const featuredProjects: Project[] = [
     tags: ["Next.js", "Supabase", "运筹优化", "小程序"],
     status: "已上线",
   },
+  {
+    slug: "numen",
+    title: "Numen",
+    description: "基于贝叶斯网络的 AI 角色扮演引擎。人格从概率分布中涌现，记忆通过印象分筛选，行为从条件概率中采样。",
+    tags: ["Python", "贝叶斯网络", "FastAPI", "Milvus"],
+    status: "开发中",
+  },
 ];
 
 const latestArticles: Article[] = [
