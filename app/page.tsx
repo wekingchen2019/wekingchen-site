@@ -7,8 +7,8 @@ const featuredProjects: Project[] = [
   {
     slug: "foresight",
     title: "Foresight",
-    description: "基于贝叶斯网络的可信度加权预测平台，支持多领域预测与社区共识机制。",
-    tags: ["Next.js", "Supabase", "贝叶斯网络", "Vercel"],
+    description: "基于可信度加权的股票预测平台。借鉴 Ray Dalio「可信度加权创意择优」思想，透明追踪每位预测者的准确性，用数据建立可信度。",
+    tags: ["Next.js", "Supabase", "运筹优化", "小程序"],
     status: "已上线",
   },
 ];
