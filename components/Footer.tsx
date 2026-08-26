@@ -31,7 +31,7 @@ export function Footer() {
               </Link>
             ))}
             <a
-              href="mailto:hello@wekingchen.com"
+              href="mailto:362868601@qq.com"
               className="text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
               联系

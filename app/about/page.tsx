@@ -52,7 +52,7 @@ export default function AboutPage() {
           有 AI 项目合作、技术交流，或者只是想聊聊？
         </p>
         <a
-          href="mailto:hello@wekingchen.com"
+          href="mailto:362868601@qq.com"
           className="inline-flex h-10 items-center rounded-lg bg-primary px-6 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/20"
         >
           发邮件给我
