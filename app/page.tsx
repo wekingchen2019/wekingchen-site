@@ -15,28 +15,12 @@ const featuredProjects: Project[] = [
 
 const latestArticles: Article[] = [
   {
-    slug: "recommendation-algorithm-7-years",
-    title: "推荐算法工程师的 7 年：从召回排序到 AI Native",
-    description: "回顾推荐算法领域的演进，以及个人在技术与商业交叉点上的思考。",
-    date: "2026-08-20",
-    category: "职业",
-    tags: ["推荐算法", "职业思考"],
-  },
-  {
-    slug: "first-principles-recommendation",
-    title: "用第一性原理重新理解推荐系统",
-    description: "回到信息与人的匹配本质，重新审视推荐系统的底层逻辑。",
-    date: "2026-08-15",
+    slug: "dify-llm-store-guide",
+    title: "如何使用 Dify 快速构建 LLM 应用 API 并自定义前端来实现门店智能导购",
+    description: "从零搭建一套门店 AI 智能导购系统：后端用 Dify 编排工作流，前端用 React 构建流式对话 + 语音交互 + 虚拟角色的完整方案。",
+    date: "2026-08-26",
     category: "技术",
-    tags: ["第一性原理", "推荐系统"],
-  },
-  {
-    slug: "ai-native-product-thinking",
-    title: "AI Native 时代，算法工程师需要什么新能力",
-    description: "当 LLM 成为基础设施，算法工程师的核心竞争力在哪里。",
-    date: "2026-08-10",
-    category: "产品思考",
-    tags: ["AI Native", "产品思考"],
+    tags: ["Dify", "LLM", "React"],
   },
 ];
 
