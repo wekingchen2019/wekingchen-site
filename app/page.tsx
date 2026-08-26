@@ -18,6 +18,13 @@ const featuredProjects: Project[] = [
     tags: ["Python", "贝叶斯网络", "FastAPI", "Milvus"],
     status: "开发中",
   },
+  {
+    slug: "growth-engine",
+    title: "Growth Engine",
+    description: "指数增长六维评价体系。从网络效应、规模报酬、TAM 扩张等维度自动评估企业增长潜力。",
+    tags: ["Python", "AKShare", "DeepSeek", "量化分析"],
+    status: "开发中",
+  },
 ];
 
 const latestArticles: Article[] = [

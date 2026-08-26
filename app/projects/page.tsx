@@ -21,6 +21,13 @@ const projects: Project[] = [
     tags: ["Python", "贝叶斯网络", "FastAPI", "Milvus"],
     status: "开发中",
   },
+  {
+    slug: "growth-engine",
+    title: "Growth Engine",
+    description: "指数增长六维评价体系。输入股票代码，从网络效应、规模报酬递增、TAM 扩张、留存飞轮、技术壁垒、单位经济六个维度自动评估企业增长潜力，输出评分报告。结合 AKShare 财务数据与 LLM 语义分析。",
+    tags: ["Python", "AKShare", "DeepSeek", "量化分析"],
+    status: "开发中",
+  },
 ];
 
 export default function ProjectsPage() {
