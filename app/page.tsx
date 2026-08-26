@@ -19,6 +19,7 @@ const latestArticles: Article[] = [
     title: "推荐算法工程师的 7 年：从召回排序到 AI Native",
     description: "回顾推荐算法领域的演进，以及个人在技术与商业交叉点上的思考。",
     date: "2026-08-20",
+    category: "职业",
     tags: ["推荐算法", "职业思考"],
   },
   {
@@ -26,6 +27,7 @@ const latestArticles: Article[] = [
     title: "用第一性原理重新理解推荐系统",
     description: "回到信息与人的匹配本质，重新审视推荐系统的底层逻辑。",
     date: "2026-08-15",
+    category: "技术",
     tags: ["第一性原理", "推荐系统"],
   },
   {
@@ -33,6 +35,7 @@ const latestArticles: Article[] = [
     title: "AI Native 时代，算法工程师需要什么新能力",
     description: "当 LLM 成为基础设施，算法工程师的核心竞争力在哪里。",
     date: "2026-08-10",
+    category: "产品思考",
     tags: ["AI Native", "产品思考"],
   },
 ];

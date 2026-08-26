@@ -6,6 +6,7 @@ export interface Article {
   title: string;
   description: string;
   date: string;
+  category: string;
   tags: string[];
 }
 
@@ -14,6 +15,9 @@ export function ArticleCard({ article }: { article: Article }) {
     <Link href={`/blog/${article.slug}`} className="group block">
       <article className="rounded-xl border border-border/50 bg-card p-6 transition-all duration-300 hover:border-border/80 hover:bg-muted/30">
         <div className="flex items-center gap-3 mb-3">
+          <span className="text-xs font-medium text-brand/80 bg-brand/10 px-2 py-0.5 rounded-full">
+            {article.category}
+          </span>
           <time className="text-xs text-muted-foreground">{article.date}</time>
           <div className="flex gap-1.5">
             {article.tags.map((tag) => (
