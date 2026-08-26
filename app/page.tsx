@@ -88,12 +88,7 @@ export default function Home() {
           <p className="text-muted-foreground mb-6 max-w-md mx-auto">
             推荐系统优化、AI 产品开发、算法咨询 —— 欢迎来聊。
           </p>
-          <a
-            href="mailto:362868601@qq.com"
-            className="inline-flex h-10 items-center rounded-lg bg-primary px-6 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/20"
-          >
-            联系我
-          </a>
+          <p className="text-foreground font-mono">362868601@qq.com</p>
         </div>
       </section>
     </>

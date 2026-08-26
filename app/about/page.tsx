@@ -48,15 +48,10 @@ export default function AboutPage() {
       {/* Contact */}
       <section>
         <h2 className="text-xl font-semibold mb-4">联系</h2>
-        <p className="text-muted-foreground mb-4">
+        <p className="text-muted-foreground">
           有 AI 项目合作、技术交流，或者只是想聊聊？
         </p>
-        <a
-          href="mailto:362868601@qq.com"
-          className="inline-flex h-10 items-center rounded-lg bg-primary px-6 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/20"
-        >
-          发邮件给我
-        </a>
+        <p className="text-foreground font-mono mt-2">362868601@qq.com</p>
       </section>
     </div>
   );
