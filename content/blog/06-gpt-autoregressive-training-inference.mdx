@@ -1,0 +1,154 @@
+---
+title: "GPT 系列：自回归语言模型的训练与推理"
+date: "2026-08-31"
+category: "LLM 深入简述"
+tags: ["LLM", "GPT", "CLM", "自回归", "RLHF", "Scaling Laws"]
+description: "从 GPT-1 到 GPT-4，自回归路线如何从'BERT 的手下败将'逆袭成大模型事实标准？关键在训练范式与推理工程的协同演进。"
+---
+
+## 一、算法概览
+
+**GPT（Generative Pre-trained Transformer）** 系列以 **CLM（因果语言建模）** 为核心目标，通过"预测下一个 token"在海量文本上自监督预训练，再经指令微调与 RLHF 对齐人类偏好。架构上是纯解码器 Transformer，使用 causal mask 保证位置 i 只能看到少于 i 的 token。GPT 路线的胜利不在于架构创新，而在于**规模化（scaling）+ 生成对齐**：当参数与数据跨过临界点，CLM 涌现出 in-context learning 与推理能力，而 MLM 路线因无法生成被边缘化。
+
+---
+
+## 二、历史背景与问题起源
+
+### 2.1 GPT-1：被 BERT 盖过风头
+
+2018 年 6 月，OpenAI 发布 GPT-1（117M 参数），用 CLM 在 BooksCorpus 上预训练，再在下游任务上微调。彼时它和 BERT 几乎同期，但 BERT 在 GLUE 上全面碾压 GPT-1，CLM 路线一度被认为"不如 MLM"。
+
+### 2.2 GPT-2：规模化的第一次证明
+
+2019 年 GPT-2（1.5B 参数）放弃微调，直接 zero-shot 提示完成任务。关键洞察：**参数和数据足够大时，CLM 能涌现出零样本能力**，而 MLM 因无法自回归生成，做不到这一点。GPT-2 因"太危险"分阶段发布，反而成了最好的营销。
+
+### 2.3 GPT-3：in-context learning 的觉醒
+
+2020 年 GPT-3（175B）提出 **few-shot in-context learning**——不用更新参数，仅在 prompt 里给几个示例，模型就能学会新任务。这是大模型范式的真正确立：从"为每个任务微调"转向"一个模型通吃所有任务"。
+
+### 2.4 GPT-4：对齐与推理工程
+
+GPT-3 之后，纯规模化收益递减。GPT-3.5/4 的突破来自 **RLHF（人类反馈强化学习）** 和推理工程（KV cache、投机解码、PagedAttention）。CLM 路线完成了从"能预测下一个词"到"会对话推理"的跃迁。
+
+---
+
+## 三、核心原理深入
+
+### 3.1 训练目标：下一个 token 预测
+
+GPT 的训练目标极其简洁——给定前文，最大化下一个 token 的对数似然：
+
+```
+L = -(1/N) · Σ log P(x_i | x_{<i}; θ)
+P(x_i | x_{<i}) = softmax(W · h_i)  # h_i 是位置 i 的隐藏状态
+```
+
+每个位置都参与损失，**训练信号密度 100%**，这是 CLM 样本效率高于 MLM 的根本原因。
+
+### 3.2 架构：解码器 + causal mask
+
+GPT 的核心是 **causal mask（因果掩码）**：在自注意力中，位置 i 对位置 j（j > i）的注意力权重被置为 -∞，softmax 后归零，保证信息只能从左流向右。
+
+```
+Attention(Q, K, V) = softmax(Q · K^T / √d_k + M) · V
+# M 是上三角掩码矩阵，上三角元素为 -∞
+```
+
+```
+M = [ 0   -∞  -∞  -∞ ]
+    [ 0   0   -∞  -∞ ]
+    [ 0   0   0   -∞ ]
+    [ 0   0   0   0  ]
+```
+
+**与 BERT 的关键差异**：BERT 用双向注意力（无 causal mask），所以能编码但不能生成；GPT 用 causal mask，所以能生成但"看不见右侧"。
+
+### 3.3 规模化：Scaling Laws
+
+Kaplan 等人 2020 年提出 **Scaling Laws**：损失随参数量 N、数据量 D、算力 C 呈幂律下降：
+
+```
+L(N) = (N_c / N)^α_N    # 参数 scaling
+L(D) = (D_c / D)^α_D    # 数据 scaling
+L(C) = (C_c / C)^α_C    # 算力 scaling
+```
+
+Hoffmann 等人 2022 年（Chinchilla）进一步修正：**最优训练是 N 和 D 同比例增长**，每参数约需 20 个 token。这解释了为什么 GPT-3（175B 参数）用 300B token 训练是"欠训练"的。
+
+### 3.4 涌现能力
+
+当规模跨过临界点，CLM 会"涌现"出训练时未显式优化的能力：few-shot learning、链式推理、代码理解。这种相变是非线性的——小模型完全没有，大模型突然有。涌现是 CLM 路线击败 MLM 的根本原因：MLM 因不能自回归生成，难以涌现 in-context learning。
+
+### 3.5 对齐：RLHF
+
+预训练后的 GPT 是"续写器"，不是"助手"。RLHF 三阶段把它变成助手：
+
+```
+1. SFT：用指令-回答对做监督微调
+2. RM：训练奖励模型打分人类偏好
+3. PPO：用强化学习最大化 RM 打分，KL 约束不偏离 SFT 太远
+```
+
+---
+
+## 四、训练/推理流程
+
+**训练流程**：
+
+```
+1. 语料去重 → 分词 → 拼接为长序列 → 打包
+2. 前向：causal mask + 多头注意力 + FFN
+3. 损失：每个位置的交叉熵
+4. 反向：混合精度（bf16）+ ZeRO/FSDP 分布式
+5. 优化：AdamW + cosine 学习率 + warmup
+```
+
+**推理流程**（自回归生成）：
+
+```
+1. 预填充（prefill）：一次前向处理整个 prompt，缓存 KV
+2. 解码（decode）：逐 token 生成，每步复用 KV cache
+3. 采样：temperature + top-p + top-k 控制多样性
+4. 停止：遇到 EOS 或达到 max_tokens
+```
+
+**KV cache 是关键**：解码时位置 i 只需算新 token 对前 i-1 个的注意力，前 i-1 个的 K/V 不变，缓存后避免重算。显存占用 **O(n · d · L)**（n 序列长、d 维度、L 层数），是长上下文推理的瓶颈。
+
+---
+
+## 五、与其他算法的关系
+
+| 技术 | 关系 |
+|------|------|
+| **BERT** | 同期对手，MLM 路线，因不能生成在大模型时代式微 |
+| **T5** | 编码-解码路线，Span Corruption，被 GPT 路线挤压 |
+| **LLaMA** | 开源 GPT 路线代表，证明 CLM 在开源侧同样可行 |
+| **PaLM/Gemini** | GPT 路线扩展，引入 FIM、多语言、MoE |
+| **DeepSeek/Qwen** | 中文场景的 CLM 实现，架构微调（RoPE、RMSNorm、MoE） |
+
+**趋势**：纯解码器 + CLM 已是大模型事实标准。变化在边缘——MoE 降低推理成本、长上下文（RoPE/ALiBi）扩展窗口、FIM 补双向能力。
+
+---
+
+## 六、关键论文
+
+| # | 论文 | 贡献 |
+|---|------|------|
+| 1 | **"Improving Language Understanding by Generative Pre-Training"** — Radford et al., 2018 | GPT-1，确立 CLM + 微调范式 |
+| 2 | **"Language Models are Unsupervised Multitask Learners"** — Radford et al., 2019 | GPT-2，zero-shot 能力 |
+| 3 | **"Language Models are Few-Shot Learners"** — Brown et al., NeurIPS 2020 ([arXiv:2005.14165](https://arxiv.org/abs/2005.14165)) | GPT-3，in-context learning |
+| 4 | **"Scaling Laws for Neural Language Models"** — Kaplan et al., 2020 ([arXiv:2001.08361](https://arxiv.org/abs/2001.08361)) | 量化规模与损失的关系 |
+| 5 | **"Training Compute-Optimal Large Language Models"** — Hoffmann et al., 2022 ([arXiv:2203.15556](https://arxiv.org/abs/2203.15556)) | Chinchilla，修正 scaling 比例 |
+| 6 | **"Training language models to follow instructions with human feedback"** — Ouyang et al., 2022 ([arXiv:2203.02155](https://arxiv.org/abs/2203.02155)) | InstructGPT，RLHF 工程化 |
+
+---
+
+## 七、实践思考
+
+**三个常见理解误区：**
+
+| 误区 | 正解 |
+|------|------|
+| ❌ "GPT 比 BERT 架构更先进" | ✅ 架构上 GPT（解码器）反而更"受限"（causal mask），胜利在于目标函数与生成对齐 + 规模化红利 |
+| ❌ "参数越大效果越好" | ✅ Chinchilla 证明欠训练的大模型不如充分训练的小模型；175B GPT-3 被 70B Chinchilla 反超 |
+| ❌ "RLHF 让模型变聪明" | ✅ RLHF 改变的是**对齐**（更听话、更安全），不增加基础能力；模型"聪明"来自预训练，RLHF 是打磨 |

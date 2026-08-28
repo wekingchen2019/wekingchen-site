@@ -1,0 +1,187 @@
+---
+title: "GRPO：Group Relative Policy Optimization 详解（DeepSeek 核心技术）"
+date: "2026-09-09"
+category: "LLM 深入简述"
+tags: ["LLM", "GRPO", "DeepSeek", "RLHF", "PPO", "推理"]
+description: "DeepSeek 在 R1 论文里用 GRPO 砍掉 critic——用'组内相对奖励'代替价值网络估计优势。这一刀让 RLHF 显存降一半，且在推理任务上表现惊艳。"
+---
+
+## 一、算法概览
+
+**GRPO（Group Relative Policy Optimization）** 是 PPO 的变体，核心改造是**去掉价值网络（critic）**。传统 PPO 用 critic `V_φ(s)` 估计基线计算优势 `A_t = G_t - V_φ(s_t)`，需额外训练一个与策略同规模的网络。GRPO 的洞察：**对同一 prompt 采样一组（group）回复，用组内奖励的均值/中位数作为基线**，省掉 critic。优势 `A_i = (r_i - mean(r)) / std(r)`，即每个回复相对组的标准化分数。这把优势估计从"学一个函数"变成"算统计量"，显存减半、实现简化。配合 PPO 的 clipped objective 与 KL 惩罚，GRPO 在数学推理（DeepSeek-R1）与代码任务上达到 SOTA。代价：采样开销增加（每个 prompt 要采 G 个回复）。
+
+---
+
+## 二、历史背景与问题起源
+
+### 2.1 PPO 在大模型场景的显存困境
+
+PPO-RLHF 要同时加载四个模型：策略 π_θ、参考 π_ref、奖励 RM、critic V_φ。其中 critic 与策略同规模（都要建模整个状态空间），70B 模型意味着额外 140GB 显存（fp16）。这对工业级训练是巨大负担——多卡 all-reduce 通信、显存峰值、工程复杂度都翻倍。DeepSeek 团队在训早期推理模型时被这个瓶颈卡住，开始寻找"无 critic"方案。
+
+### 2.2 优势估计的本质：为什么要基线
+
+策略梯度中优势 `A_t = G_t - b(s)` 的 `b(s)` 是**基线**（baseline），用于降低方差。理论上任何与动作无关的量都可作基线，critic `V_φ(s)` 只是最常用选择。如果用其他方式估计基线，critic 就非必需。这个观察是 GRPO 的理论起点——**基线不一定要学，可以"算"**。
+
+### 2.3 从 REINFORCE 到 GRPO
+
+最简单的策略梯度（REINFORCE）用回报均值作基线，无 critic 但方差大。GRPO 的巧思：**对同一 prompt 采一组回复，用组内统计量作基线**。这比单条样本的均值更准（样本更多），又比 critic 更省（无需训练网络）。DeepSeek 在 R1 训练中验证：GRPO 在数学推理上不仅省资源，效果还优于 PPO——因为推理任务的奖励（答案对错）天然适合"组内比较"，绝对分数意义不大，相对排名才是关键。
+
+---
+
+## 三、核心原理深入
+
+### 3.1 传统 PPO 的优势估计
+
+PPO 用 GAE 估计优势，依赖 critic `V_φ(s)`：
+
+```
+δ_t = r_t + γ·V_φ(s_{t+1}) - V_φ(s_t)    # TD 误差
+A_t^GAE = Σ_l (γ·λ)^l · δ_{t+l}
+
+需要训练 V_φ，损失 L^VF = (V_φ(s) - G_t)²
+```
+
+critic 与策略同规模，是显存大头。
+
+### 3.2 GRPO 的核心改造：group baseline
+
+GRPO 对每个 prompt `x` 采样一组 G 个回复 `{y_1, ..., y_G}`，用 RM 打分 `{r_1, ..., r_G}`：
+
+```
+对 prompt x：
+  采样 G 个回复 y_1, ..., y_G ~ π_θ(·|x)
+  计算奖励 r_i = r_θ(x, y_i) （可能含 KL 惩罚或规则奖励）
+
+组内基线：
+  mean = (1/G)·Σ_i r_i
+  std = √( (1/G)·Σ_i (r_i - mean)² )
+
+优势（标准化）：
+  A_i = (r_i - mean) / std
+```
+
+**通俗类比**：考试评分。传统 PPO 像"请一个老师（critic）估计这道题的平均分作基线"；GRPO 像"让全班（group）都做这道题，用实际平均分作基线"。后者更准（真实统计），且不用养老师。
+
+**直觉解读**：`A_i > 0` 说明回复 `i` 比组内平均好，应该提升其概率；`A_i < 0` 说明比平均差，应该降低。标准化（除以 std）让优势尺度稳定，跨不同 prompt 可比。
+
+### 3.3 GRPO 的目标函数
+
+GRPO 仍用 PPO 的 clipped surrogate 形式，只是优势来源改变：
+
+```
+L^GRPO = E[ min( r_t(θ)·A_i , clip(r_t(θ), 1-ε, 1+ε)·A_i ) ] - β·KL(π_θ || π_ref)
+
+其中：
+  r_t(θ) = π_θ(y_i|x) / π_θ_old(y_i|x)    # 概率比率
+  A_i = (r_i - mean) / std                   # 组内标准化优势
+  KL 可用 token 级 k3 估计器近似
+```
+
+与 PPO 的区别**仅在 `A_i` 的计算方式**——PPO 用 GAE+critic，GRPO 用 group 统计量。clip 与 KL 惩罚完全保留，稳定性不打折。
+
+### 3.4 为什么推理任务特别适合 GRPO
+
+数学/代码任务有**明确正误**（答案对就是 1，错就是 0），奖励是二值的：
+
+```
+r_i ∈ {0, 1}
+
+若 G 个回复中 K 个对：
+  mean = K/G
+  std = √(K/G · (1-K/G))
+
+对的回复：A = (1 - K/G)/std > 0  提升
+错的回复：A = (0 - K/G)/std < 0  降低
+```
+
+这种场景下 group baseline **天然契合**——相对排名比绝对分数更有意义。DeepSeek-R1 用规则奖励（答案对错）+ GRPO，在 AIME、MATH 等推理 benchmark 上达到 OpenAI o1 级别。
+
+### 3.5 token 级优势与 KL 估计
+
+GRPO 把序列级优势 `A_i` 分配到每个 token：
+
+```
+对回复 y_i = (y_i,1, y_i,2, ..., y_i,T)：
+  每个 token 的优势 = A_i （序列级优势广播到 token）
+
+KL 估计（k3 估计器，低方差）：
+  KL(π_θ || π_ref) ≈ Σ_t (π_ref(y_t|·)/π_θ(y_t|·) - log(π_ref(y_t|·)/π_θ(y_t|·)) - 1)
+```
+
+token 级广播让每个 token 都有梯度信号，训练更高效。
+
+### 3.6 工程权衡：采样开销 vs 显存节省
+
+```
+PPO：   每 prompt 采 1 个回复，但训 critic（显存 ×2）
+GRPO：  每 prompt 采 G 个回复（G=4~16），无 critic（显存 ×1）
+
+净效果：
+  显存：GRPO 省 critic（减半），但采样 batch 更大（增 G 倍）
+  计算：GRPO 前向 G 倍，但无 critic 反向（省一份）
+  通信：GRPO 少一份 all-reduce（critic 梯度）
+
+实践中 G=8 时，GRPO 总开销 ≈ PPO 的 60-70%，且工程简单
+```
+
+---
+
+## 四、训练/推理流程
+
+**GRPO 训练流程**：
+
+```
+1. 初始化策略 π_θ（通常 SFT 或中间检查点）
+2. 冻结参考模型 π_ref 与 RM（若用 RM 打分）
+3. 训练循环：
+   a. 采样一批 prompt {x_1, ..., x_B}
+   b. 对每个 x_j，用 π_θ_old 采样 G 个回复 {y_j,1, ..., y_j,G}
+   c. 计算奖励 r_j,i = RM(x_j, y_j,i) 或规则奖励
+   d. 计算 group 优势 A_j,i = (r_j,i - mean_j) / std_j
+   e. 对 K 个 epoch：
+      - 计算 r_t(θ) = π_θ(y_j,i|x_j) / π_θ_old(y_j,i|x_j)
+      - 计算 clipped surrogate loss
+      - 加 KL 惩罚
+      - 反向更新 θ
+   f. θ_old ← θ
+4. 直到收敛（监控奖励均值与 KL）
+```
+
+**推理流程**：与 PPO/DPO 相同，直接用训练好的 π_θ 生成。GRPO 训练的模型已内化奖励信号，推理时无额外开销。
+
+---
+
+## 五、与其他算法的关系
+
+| 方法 | 关系 |
+|------|------|
+| **PPO** | GRPO 是其变体，把 GAE+critic 换成 group baseline |
+| **REINFORCE with baseline** | GRPO 是其"多样本版"，用 group 均值降方差 |
+| **RLHF** | GRPO 可用于 RLHF 第三阶段，替换 PPO |
+| **DPO** | DPO 跳过 RM 与 RL；GRPO 保留 RM/规则奖励但去 critic |
+| **PRM（Process RM）** | GRPO 可与 PRM 结合，token 级奖励+group baseline |
+| **Self-play / RFT** | 用模型自生成数据做拒绝采样微调；GRPO 是其在线 RL 版本 |
+
+---
+
+## 六、关键论文
+
+| # | 论文 | 贡献 |
+|---|------|------|
+| 1 | **"DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models"** — Shao et al., 2024 ([arXiv:2402.03300](https://arxiv.org/abs/2402.03300)) | 提出 GRPO，数学推理验证 |
+| 2 | **"DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning"** — DeepSeek-AI, 2025 ([arXiv:2501.12948](https://arxiv.org/abs/2501.12948)) | 用 GRPO 训 R1，达到 o1 级推理 |
+| 3 | **"Proximal Policy Optimization Algorithms"** — Schulman et al., 2017 ([arXiv:1707.06347](https://arxiv.org/abs/1707.06347)) | PPO，GRPO 的基础 |
+| 4 | **"Asynchronous Methods for Deep Reinforcement Learning (A3C)"** — Mnih et al., 2016 ([arXiv:1602.01783](https://arxiv.org/abs/1602.01783)) | 优势函数与基线的早期实践 |
+| 5 | **"Let's Verify Step by Step (PRM)"** — Lightman et al., 2023 ([arXiv:2305.20050](https://arxiv.org/abs/2305.20050)) | 过程级奖励，与 GRPO 互补 |
+
+---
+
+## 七、实践思考
+
+**三个常见理解误区：**
+
+| 误区 | 正解 |
+|------|------|
+| ❌ "GRPO 比 PPO 更先进，一定更好" | ✅ GRPO 只是去 critic 的 PPO 变体；非推理任务上优势不明显，对话任务仍可能 PPO 更优 |
+| ❌ "group 越大越好（更准的基线）" | ✅ G 太大采样开销爆炸；G=8-16 是经验最优，再大收益递减 |
+| ❌ "GRPO 不需要 RM" | ✅ GRPO 去 critic 不去 RM；推理任务可用规则奖励代替 RM，但对话任务仍需 RM 打分 |

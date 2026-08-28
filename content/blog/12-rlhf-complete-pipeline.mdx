@@ -1,0 +1,166 @@
+---
+title: "RLHF：人类反馈强化学习的完整流程"
+date: "2026-09-06"
+category: "LLM 深入简述"
+tags: ["LLM", "RLHF", "SFT", "奖励模型", "PPO", "对齐"]
+description: "RLHF 是 ChatGPT 横空出世的'秘密武器'。它不是单一算法，而是一条三阶段流水线：SFT → RM → PPO。本篇把整条流水线讲透。"
+---
+
+## 一、算法概览
+
+**RLHF（Reinforcement Learning from Human Feedback）** 用人类偏好信号对齐大模型，分三阶段：① **SFT**——用高质量示范数据让基础模型学会"指令跟随"格式；② **RM**——用人类偏好对（preferred vs rejected）训练一个打分模型，把"好坏"变成标量奖励；③ **PPO**——把 RM 当环境，用强化学习优化策略（语言模型），让模型生成高奖励回复。核心难点不在算法本身，而在**偏好数据质量**与**奖励 hacking 防御**。RLHF 让模型从"预测下一个 token"转向"生成有用、诚实、无害的回答"，是对齐工程的基石。
+
+---
+
+## 二、历史背景与问题起源
+
+### 2.1 预训练模型的"对齐鸿沟"
+
+GPT-3（175B）出现时，能力已惊人，但直接对话会输出有害、胡编、不跟指令的内容。原因是预训练目标是"续写互联网文本"，而非"做助手"。**模型能力≠模型可用性**——能力靠预训练，可用性靠对齐。
+
+### 2.2 早期对齐的困境
+
+最初的对齐方法是**监督微调（SFT）**：人工写示范回复，模型模仿。问题：① 人工写高质量回复成本极高；② "好"的定义模糊，不同标注员标准不一；③ 模型容易学到表面格式而非真正偏好。需要一种**用比较代替绝对评分**的方法——人类更擅长"哪个更好"而非"这个几分"。
+
+### 2.3 RLHF 的突破
+
+2017 年 Christiano 提出 **RLHF 范式**：让人类比较两个回答，训练偏好模型，再用 RL 优化。2019 年 Ziegler 把它用于 LM；2022 年 InstructGPT 论文证实 RLHF 让 1.3B 模型的对齐效果超过 175B 原始 GPT-3。2023 年 ChatGPT 把这套流程产品化引爆市场。RLHF 的精髓：**用相对偏好代替绝对标注，用 RM 把偏好变成可优化标量，用 PPO 在线探索更优策略**。
+
+---
+
+## 三、核心原理深入
+
+### 3.1 第一阶段：SFT（监督微调）
+
+SFT 是 RLHF 的"地基"——让模型先学会"对话格式"，否则后续 RL 从随机策略起步太难收敛。
+
+```
+输入：高质量指令-回复对 (prompt, response)
+损失：标准语言模型交叉熵
+L_SFT = -Σ_t log p_θ(response_t | prompt, response_{<t})
+```
+
+SFT 数据量通常 1 万到 10 万条，质量远比数量重要。InstructGPT 用约 1.3 万条 SFT 数据就取得显著效果。
+
+### 3.2 第二阶段：RM（奖励模型）
+
+RM 把"人类偏好"变成"可微标量"。
+
+```
+数据形式：(prompt, response_A, response_B, preference)
+  preference = "A > B" 或 "B > A"（也可能平局）
+
+训练目标（Bradley-Terry 模型）：
+  r_θ(x, y)   RM 对 prompt x、回复 y 的打分
+  P(A > B | x) = sigmoid(r_θ(x, A) - r_θ(x, B))
+
+损失：
+  L_RM = -log sigmoid(r_θ(x, win) - r_θ(x, lose))
+```
+
+**直觉**：RM 学到"哪个回复分高"。人类只做"二选一"比较（比写绝对分容易且一致），RM 从大量比较中拟合出连续分数。RM 通常用 SFT 模型初始化（去掉 LM head，换成标量输出头），用 5 万到 50 万对偏好数据训练。
+
+### 3.3 第三阶段：PPO（策略优化）
+
+把 SFT 模型作为初始策略，RM 作为环境，用 PPO 优化：
+
+```
+状态 s = prompt + 已生成前缀
+动作 a = 下一个 token
+奖励 r = RM(prompt, full_response) - β · KL(π_θ || π_SFT)
+
+目标：
+  maximize E_{x~D, y~π_θ}[ r_θ(x, y) - β · KL(π_θ(·|x) || π_SFT(·|x)) ]
+```
+
+**关键设计：KL 惩罚**。为什么不能直接最大化 RM 分数？因为 RM 不完美，模型会找到 RM 的漏洞刷分（reward hacking）——生成 RM 觉得好但人类觉得奇怪的文本。**KL 惩罚**把策略拉回 SFT 附近，防止漂太远：
+
+```
+L_PPO = -L^CLIP(θ) + c1·L^VF + c2·S[π_θ] + β·KL(π_θ || π_ref)
+
+β 通常 0.01 ~ 0.5，控制"探索新风格"与"贴近 SFT"的权衡
+```
+
+实践中常动态调 β：KL 超过阈值就加大惩罚，低于阈值就放松。
+
+### 3.4 整体流程的"三段式"直觉
+
+```
+阶段      目标           数据                产出
+SFT       学对话格式      1万-10万示范对        π_SFT
+RM        学人类偏好      5万-50万比较对        r_θ
+PPO       用RM优化策略    RM在线打分           π_RLHF
+```
+
+**类比**：SFT 像教徒弟基本功（临摹），RM 像师父打分（哪个作品好），PPO 像徒弟根据师父反馈反复练习精进。三阶段缺一不可——没 SFT 则起点太差，没 RM 则没有优化信号，没 PPO 则无法超越人类示范。
+
+### 3.5 RLHF 的核心难点
+
+**Reward Hacking**：模型钻 RM 漏洞。典型表现：过分冗长、阿谀奉承、刻意讨好、风格化但无内容。缓解手段：① KL 惩罚；② RM 与策略同步更新（online RM）；③ 多 RM 集成；④ 定期人工抽检。
+
+**分布偏移**：RM 在 SFT 数据上训练，但 PPO 会生成分布外的回复，RM 在 OOD 上打分不可靠。缓解：① 用 PPO 生成的样本回填训练 RM；② 用 ensemble 降低方差。
+
+---
+
+## 四、训练/推理流程
+
+**RLHF 训练全流程**：
+
+```
+1. SFT 阶段：
+   a. 收集/清洗高质量指令数据
+   b. 用交叉熵微调基础模型
+   c. 产出 π_SFT
+
+2. RM 阶段：
+   a. 用 π_SFT 对同一 prompt 生成多个回复
+   b. 人工标注偏好对（A > B）
+   c. 训练 RM，用 Bradley-Terry 损失
+   d. 产出 r_θ
+
+3. PPO 阶段：
+   a. 初始化 π_θ = π_SFT，π_ref = π_SFT（冻结）
+   b. 采样 prompt，用 π_θ 生成回复
+   c. 用 r_θ 打分，计算 reward = r_θ - β·KL
+   d. 用 PPO 更新 π_θ（clip + GAE + value 网络）
+   e. 重复 b-d 直到收敛或达到目标 KL
+```
+
+**推理流程**：训练完成后直接用 π_RLHF 生成，RM 不参与推理。模型已内化偏好信号，部署成本与原模型相同。
+
+---
+
+## 五、与其他算法的关系
+
+| 方法 | 关系 |
+|------|------|
+| **SFT** | RLHF 的第一阶段，提供起点策略；纯 SFT 无 RM 则无法超越人类示范 |
+| **RLAIF** | 用 AI（如更强模型）代替人类做偏好标注，降低成本 |
+| **DPO** | 跳过 RM 与 PPO，直接用偏好数据训练；更简单但牺牲在线探索 |
+| **Constitutional AI** | Anthropic 的方法，用 AI 自我对齐 + RLHF，减少人工标注 |
+| **RRHF** | 用排序损失直接微调，介于 SFT 与 RLHF 之间 |
+| **GRPO** | DeepSeek 的 PPO 变体，去 critic，降低 RLHF 成本 |
+
+---
+
+## 六、关键论文
+
+| # | 论文 | 贡献 |
+|---|------|------|
+| 1 | **"Deep Reinforcement Learning from Human Preferences"** — Christiano et al., 2017 ([arXiv:1706.03741](https://arxiv.org/abs/1706.03741)) | RLHF 范式奠基 |
+| 2 | **"Fine-Tuning Language Models from Human Preferences"** — Ziegler et al., 2019 ([arXiv:1909.08593](https://arxiv.org/abs/1909.08593)) | 首次把 RLHF 用于 LM |
+| 3 | **"Training Language Models to Follow Instructions with Human Feedback (InstructGPT)"** — Ouyang et al., 2022 ([arXiv:2203.02155](https://arxiv.org/abs/2203.02155)) | RLHF 三阶段完整流程，工业级验证 |
+| 4 | **"Constitutional AI: Harmlessness from AI Feedback"** — Bai et al., 2022 ([arXiv:2212.08073](https://arxiv.org/abs/2212.08073)) | Constitutional AI，减少人工标注 |
+| 5 | **"Learning to Summarize from Human Feedback"** — Stiennon et al., 2020 ([arXiv:2009.01325](https://arxiv.org/abs/2009.01325)) | RLHF 用于摘要任务，验证有效性 |
+
+---
+
+## 七、实践思考
+
+**三个常见理解误区：**
+
+| 误区 | 正解 |
+|------|------|
+| ❌ "RLHF = PPO" | ✅ RLHF 是 SFT→RM→PPO 三阶段流水线，PPO 只是其中一步 |
+| ❌ "RM 分数越高，模型越好" | ✅ RM 有偏，高分可能来自 reward hacking；需人工评估 + 多指标 |
+| ❌ "RLHF 一定比 SFT 好" | ✅ 数据质量差时 RLHF 反而引入偏差；小模型/小数据场景 SFT 更稳 |

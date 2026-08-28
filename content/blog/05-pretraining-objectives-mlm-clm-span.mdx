@@ -1,0 +1,146 @@
+---
+title: "预训练目标：MLM、CLM、Span Corruption 对比"
+date: "2026-08-30"
+category: "LLM 深入简述"
+tags: ["LLM", "预训练", "MLM", "CLM", "BERT", "GPT", "T5"]
+description: "预训练目标决定了模型在无监督语料上'自学会'什么能力，是模型能力边界的第一决定因素。MLM 学双向理解，CLM 学生成，Span Corruption 两者兼顾。"
+---
+
+## 一、算法概览
+
+预训练目标是模型在海量无标注文本上进行自监督学习的"考题形式"。三大主流范式：**MLM（Masked Language Modeling，掩码语言建模）**——随机遮挡 token 让模型还原，双向编码代表 BERT；**CLM（Causal Language Modeling，因果语言建模）**——从左到右预测下一个 token，自回归代表 GPT；**Span Corruption（片段损坏）**——随机挖掉连续片段让模型补全，编码-解码代表 T5。目标函数看似都是交叉熵，但遮掩方式不同，导致模型学到的能力截然不同：MLM 学双向理解，CLM 学生成，Span Corruption 两者兼顾。
+
+---
+
+## 二、历史背景与问题起源
+
+### 2.1 预训练的觉醒
+
+2018 年前，NLP 任务几乎都从随机初始化的模型开始训练，效果天花板低、数据需求大。ELMo（2018）首次系统验证了"先在通用语料预训练、再在下游任务微调"的范式。随后 BERT 和 GPT 几乎同时出现，却选择了截然不同的预训练目标，从此分道扬镳。
+
+### 2.2 三种目标的诞生动机
+
+- **MLM** 源于完形填空直觉：让模型根据上下文预测被遮的词，天然要求双向理解。BERT 把 15% 的 token 用 `[MASK]` 替换，模型必须看左右两侧才能还原。
+- **CLM** 源于语言模型传统：给定前文预测下一个词。GPT 选择这条路是因为它**与生成任务天然对齐**，且训练时只有一个方向，并行度高。
+- **Span Corruption** 由 T5（2019）提出，动机是统一所有任务为"文本到文本"格式。它不是预测单个 token，而是补全被挖掉的连续片段，被认为兼具理解与生成能力。
+
+核心矛盾：**双向 vs 单向**。MLM 能看见未来（被遮位置右侧的词），CLM 不能。这个差异决定了三者各自的适用域。
+
+---
+
+## 三、核心原理深入
+
+### 3.1 MLM：掩码语言建模
+
+**MLM** 的做法：随机选 15% 的 token，其中 80% 替换为 `[MASK]`，10% 替换为随机 token，10% 保持不变。模型目标是预测原始 token。
+
+```
+输入： The [MASK] sat on the mat
+目标： cat
+损失： L = -Σ log P(x_i | x_被遮掩的上下文)
+```
+
+**关键点**：由于被遮位置同时可见左右上下文，注意力必须是**双向**的，所以 BERT 不能用 causal mask。这也意味着 MLM **不能直接用于生成**——生成时右侧还没产生，无法做双向注意力。
+
+**训练效率问题**：每条样本只有 15% 的 token 参与损失计算，其余 85% 的计算被"浪费"。这是 MLM 训练效率低于 CLM 的根本原因。
+
+### 3.2 CLM：因果语言建模
+
+**CLM** 的做法：给定前 i-1 个 token，预测第 i 个 token。
+
+```
+P(x_1, ..., x_n) = Π P(x_i | x_1, ..., x_{i-1})  # 自回归分解
+损失：L = -Σ log P(x_i | x_{<i})
+```
+
+**关键点**：通过 causal mask（上三角掩码）保证位置 i 只能看到位置少于 i 的 token。每个位置都参与损失计算，**训练信号密度 100%**，这是 GPT 系列样本效率高于 BERT 的原因之一。
+
+**推理特性**：生成时逐 token 产出，天然适配对话/续写；但每次生成要重算 KV cache，可优化但仍比 MLM 的"一次性编码"慢。
+
+### 3.3 Span Corruption：片段损坏
+
+**Span Corruption**（T5）的做法：随机选若干片段，每个片段长度服从某种分布，用哨兵 token（如 `<extra_id_0>`）替换，模型依次补全。
+
+```
+输入： Thank you <extra_id_0> me to your party <extra_id_1> week
+目标： <extra_id_0> for inviting <extra_id_1> last
+```
+
+**设计巧思**：
+
+- 片段长度不固定（T5 用 3 的几何分布），迫使模型既要补短词也要补长段落。
+- 哨兵 token 让任务统一为 seq2seq，所有 NLP 任务都能套用"输入文本→输出文本"模板。
+- 编码器双向看输入，解码器自回归生成输出，**兼具理解与生成**。
+
+**Span Corruption 与 MLM 的区别**：MLM 预测离散的、被打散的单个 token；Span Corruption 预测连续片段，模型必须推断片段边界和内部结构，难度更高、信号更结构化。
+
+### 3.4 三者数学上的统一
+
+三种目标本质上都是**最大化被遮/被预测部分的对数似然**，区别在于分解方式：
+
+```
+MLM: log P(x_遮 | x_未遮)              # 双向，部分位置
+CLM: Σ log P(x_i | x_{<i})             # 单向，所有位置
+Span: Σ log P(span_k | x_损坏, span_{<k}) # 编码双向 + 解码单向
+```
+
+---
+
+## 四、训练/推理流程
+
+**CLM 训练**（GPT 系）：
+
+```
+1. 语料拼接为长序列，截断为 chunk
+2. 构造 (x_{<i}, x_i) 训练对
+3. 前向：causal mask + 自注意力
+4. 损失：每个位置的交叉熵，求平均
+5. 反向更新
+```
+
+**MLM 训练**（BERT）：在 batch 内动态掩码（每轮不同），避免预计算掩码的内存浪费。
+
+**推理**：
+
+- CLM：自回归，KV cache 加速，重复解码。
+- MLM：一次前向即可编码，但无法用于开放生成。
+- Span Corruption：编码器一次前向 + 解码器自回归。
+
+---
+
+## 五、与其他算法的关系
+
+| 技术 | 关系 |
+|------|------|
+| **BERT** | MLM 的代表，但因不能生成，在大模型时代被边缘化 |
+| **GPT 系列** | CLM 的代表，因与生成对齐而成为大模型主流 |
+| **T5/BART** | Span Corruption/Perturbed Autoencoder，编码-解码架构 |
+| **Prefix LM** | CLM 变体，前缀双向、后缀单向，GLM/ChatGLM 采用 |
+| **UL2** | 混合多种目标（R-Denoiser/S-Denoiser/X-Denoiser），试图统一 |
+| **Fill-in-the-Middle (FIM)** | CLM 的扩展，在代码补全等场景注入双向信号，PaLM/Codex 在用 |
+
+**趋势**：纯 CLM 已成为大模型事实标准，因为它与生成任务对齐、训练信号稠密、架构简单。但 FIM 等技术正在"偷偷"把双向信号注入 CLM，弥补其理解能力短板。
+
+---
+
+## 六、关键论文
+
+| # | 论文 | 贡献 |
+|---|------|------|
+| 1 | **"BERT: Pre-training of Deep Bidirectional Transformers"** — Devlin et al., NAACL 2019 ([arXiv:1810.04805](https://arxiv.org/abs/1810.04805)) | 提出 MLM 预训练目标，双向编码器范式 |
+| 2 | **"Language Models are Unsupervised Multitask Learners"** — Radford et al., 2019 | GPT-2 验证 CLM 的 zero-shot 能力 |
+| 3 | **"Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer"** — Raffel et al., JMLR 2020 ([arXiv:1910.10683](https://arxiv.org/abs/1910.10683)) | T5 提出 Span Corruption，统一 seq2seq 范式 |
+| 4 | **"GLM: General Language Model Pretraining with Autoregressive Blank Infilling"** — Du et al., ACL 2022 ([arXiv:2103.10360](https://arxiv.org/abs/2103.10360)) | 提出空白填充统一理解与生成 |
+| 5 | **"Efficient Training of Language Models to Fill in the Middle"** — Bavarian et al., 2022 ([arXiv:2207.14255](https://arxiv.org/abs/2207.14255)) | FIM 让 CLM 获得双向补全能力 |
+
+---
+
+## 七、实践思考
+
+**三个常见理解误区：**
+
+| 误区 | 正解 |
+|------|------|
+| ❌ "MLM 训练更难，所以效果差" | ✅ MLM 效果不差，差在**不能生成**且训练信号稀疏（仅 15% 位置），商业场景受限 |
+| ❌ "Span Corruption 是 MLM 的升级版" | ✅ 两者目标不同：MLM 补散点，Span 补连续片段，架构也不同（编码-解码 vs 单编码器） |
+| ❌ "CLM 只会生成，理解能力弱" | ✅ 大规模 CLM 通过 in-context learning 展现强理解力，但本质是"生成式理解"，闭合任务上仍不如双向模型稳健 |

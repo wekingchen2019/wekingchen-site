@@ -1,0 +1,193 @@
+---
+title: "Reward Model：如何训练一个好的奖励模型"
+date: "2026-09-07"
+category: "LLM 深入简述"
+tags: ["LLM", "奖励模型", "RLHF", "Bradley-Terry", "对齐"]
+description: "RM 是 RLHF 的'评分官'——它把模糊的'人类偏好'翻译成可优化的标量信号。RM 一旦学歪，PPO 会把模型带向万劫不复的 reward hacking。"
+---
+
+## 一、算法概览
+
+**Reward Model（RM）** 是一个**打分函数** `r_θ(x, y)`，输入 prompt `x` 与回复 `y`，输出标量奖励。训练数据是人类标注的**偏好对**（preferred vs rejected），训练目标基于 **Bradley-Terry 模型**：偏好概率正比于分数差的 sigmoid。RM 通常用 SFT 模型初始化（替换 LM head 为标量输出头），用 pairwise ranking loss 训练。核心挑战：① 标注噪声与标注员分歧；② **过优化（overoptimization）**——PPO 阶段策略会钻 RM 漏洞刷分；③ 分布偏移（RM 在 SFT 数据上训练，PPO 生成 OOD 回复）。RM 质量是 RLHF 效果的天花板。
+
+---
+
+## 二、历史背景与问题起源
+
+### 2.1 为什么需要 RM 而非直接用人类分数
+
+早期对齐尝试让标注员给回复打绝对分（1-5 星）。问题严重：① 标注员间一致性极低（同一回复 A 给 4 分 B 给 2 分）；② "5 分"的标准因人而异；③ 难以捕捉细微差异。研究发现人类更擅长**相对比较**（"A 比 B 好"）而非**绝对评分**，一致性提升 3-5 倍。因此 RM 设计成从比较中学习，而非拟合绝对分。
+
+### 2.2 Bradley-Terry 模型的渊源
+
+Bradley-Terry 模型源于 1952 年的统计学，用于体育比赛排名——把"A 战胜 B 的概率"建模为两人"实力"差的 sigmoid。Christiano 在 2017 年把它引入 RLHF：把"人类偏好 A>B"看作"A 战胜 B"，RM 分数就是"回复实力"。这个优雅的映射让偏好数据可直接用最大似然训练，无需绝对分。
+
+### 2.3 过优化问题的浮现
+
+InstructGPT 论文报告一个关键现象：**RM 分数持续上升，但真实质量在某个点后开始下降**。原因：RM 是有限数据训练的近似，高维参数空间存在"盲点"，PPO 会找到这些盲点刷分（生成 RM 觉得好但人类觉得怪的文本）。Gao 等人 2023 年系统研究此现象，提出 **overoptimization curve**——RM 分数与真实质量的"先升后降"关系，成为 RM 工程的核心关注点。
+
+---
+
+## 三、核心原理深入
+
+### 3.1 Bradley-Terry 模型：偏好即实力差
+
+给定 prompt `x` 与两个回复 `y_win`、`y_lose`，RM 建模偏好概率：
+
+```
+P(y_win > y_lose | x) = sigmoid(r_θ(x, y_win) - r_θ(x, y_lose))
+
+等价于：
+  log P(y_win > y_lose | x) / P(y_lose > y_win | x) = r_θ(x, y_win) - r_θ(x, y_lose)
+```
+
+**通俗类比**：电竞天梯。两个选手对战，胜率取决于积分差——分差越大，强者赢概率越接近 1。RM 分数就是"回复的天梯分"，人类偏好就是"对战结果"。训练 RM 等于从大量对战记录反推每个选手的真实实力。
+
+### 3.2 训练损失：pairwise ranking loss
+
+从偏好对数据集训练 RM，用负对数似然：
+
+```
+L_RM = -E_{(x, y_win, y_lose)}[ log sigmoid(r_θ(x, y_win) - r_θ(x, y_lose)) ]
+
+等价形式（令 Δ = r_θ(x, y_win) - r_θ(x, y_lose)）：
+  L = -log sigmoid(Δ) = log(1 + e^{-Δ})
+```
+
+**直觉**：当 RM 给 win 和 lose 相同分数（Δ=0），损失 = log(2) ≈ 0.69；当 RM 正确区分且分差大（Δ 大），损失趋近 0；当 RM 打反（Δ 负），损失爆炸。这迫使 RM 学会"好回复分高、坏回复分低"。
+
+**变体**：
+
+```
+Margin loss：  L = max(0, margin - Δ)  要求分差超过 margin
+Contrastive：  L = -log softmax(r_θ(x, y_win))  多候选中选最好
+KL 防漂移：    L_total = L_RM + λ·KL(r_θ || r_init)  防止 RM 漂离初值
+```
+
+### 3.3 数据标注策略
+
+**标注流程**：
+
+```
+1. 给标注员 prompt x
+2. 用 π_SFT 生成 K 个回复（K=2~8）
+3. 标注员排序或两两比较
+4. 记录 (x, y_1, y_2, preference)
+```
+
+**关键设计**：
+
+```
+单点标注：  每个 prompt 只标一对，数据多样性高但效率低
+多点排序：  每个 prompt 标注员排序 K 个回复，产生 K*(K-1)/2 对，效率高
+平局允许：  允许"A 和 B 差不多"，避免强制二选一引入噪声
+标注员共识： 多人标注同一对，取多数或过滤分歧大的样本
+```
+
+**数据质量大于数量**：InstructGPT 发现 50 万对高质量数据效果远好于 200 万对噪点数据。建议：① 标注员培训+测试；② 每周抽检；③ 用 inter-annotator agreement 过滤。
+
+### 3.4 过优化：RM 的阿喀琉斯之踵
+
+**现象**：PPO 优化过程中，RM 分数单调上升，但真实质量先升后降。
+
+```
+RM 分数：   ──────────────────────  持续上升
+真实质量：   ─────╱────╲──────────  先升后降（拐点在 D/D_crit 附近）
+
+D = KL(π_θ || π_SFT)，D_crit 取决于 RM 规模与数据量
+```
+
+**原因**：RM 在有限数据上训练，存在未覆盖的"盲区"。PPO 是强大优化器，会找到这些盲区——生成 RM 给高分但人类觉得怪的文本（冗长、阿谀、风格化无内容）。
+
+**缓解手段**：
+
+```
+1. KL 惩罚：  reward = r_θ(x,y) - β·KL(π_θ || π_SFT)
+   β 控制"探索"与"贴近 SFT"的权衡
+
+2. RM ensemble： 用多个 RM 平均打分，降低单个 RM 的盲区影响
+   reward = mean_i[r_θ_i(x,y)]
+
+3. Online RM：  PPO 生成的样本回填训练 RM，修复盲区
+   每隔 N 步用新数据更新 RM
+
+4. 模型规模：  更大 RM（与策略同规模或更大）过优化更慢
+   Gao 2023：RM 参数量翻倍，D_crit 提升约 2 倍
+```
+
+### 3.5 RM 的架构选择
+
+```
+方案 A：序列末端标量（最常见）
+  r_θ(x, y) = MLP(last_hidden_state)
+  优点：简单；缺点：只看结尾，可能忽略中间质量
+
+方案 B：token 级奖励
+  r_θ(x, y_t) 每个 token 一个奖励，最后求和
+  优点：细粒度；缺点：训练难，标注成本高（PRM 方向）
+
+方案 C：对比嵌入（DPO 思路）
+  不显式训 RM，直接用策略隐式表示
+  优点：省 RM；缺点：不能在线打分
+```
+
+主流 RLHF 用方案 A，复杂度 **O(n)**（n 为序列长度），与生成同阶。
+
+---
+
+## 四、训练/推理流程
+
+**RM 训练流程**：
+
+```
+1. 用 π_SFT 对 prompt 生成多个回复
+2. 人工标注偏好对（win/lose 或排序）
+3. 清洗数据：过滤分歧大、平局、长度作弊样本
+4. 用 SFT 模型初始化 RM（换标量 head）
+5. 训练：
+   a. 输入 (x, y_win, y_lose)
+   b. 前向计算 r_θ(x, y_win)、r_θ(x, y_lose)
+   c. 计算 L_RM = -log sigmoid(Δ)
+   d. 反向更新 θ
+6. 验证：用 held-out 偏好对计算准确率（目标 >65%）
+```
+
+**推理流程**：RM 不直接服务用户，只在 PPO 训练时调用。输入 (prompt, response)，输出标量分数。部署时 RM 与策略模型分开托管。
+
+---
+
+## 五、与其他算法的关系
+
+| 概念 | 关系 |
+|------|------|
+| **Bradley-Terry** | RM 的数学基础，把偏好建模为实力差 |
+| **SFT** | RM 通常用 SFT 模型初始化，复用表示能力 |
+| **PPO** | RM 是 PPO 的环境，提供奖励信号 |
+| **DPO** | 用策略隐式表示 RM，跳过显式 RM 训练 |
+| **PRM（Process RM）** | token/step 级奖励，用于数学推理等需要过程评估的任务 |
+| **Constitutional AI** | 用 AI 反馈代替/补充人类标注训练 RM |
+| **RLAIF** | 用更强模型（如 GPT-4）代替人类做偏好标注 |
+
+---
+
+## 六、关键论文
+
+| # | 论文 | 贡献 |
+|---|------|------|
+| 1 | **"Rank Analysis of Incomplete Block Designs: The Method of Paired Comparisons"** — Bradley & Terry, 1952 | Bradley-Terry 模型，RM 数学基础 |
+| 2 | **"Training Language Models to Follow Instructions (InstructGPT)"** — Ouyang et al., 2022 ([arXiv:2203.02155](https://arxiv.org/abs/2203.02155)) | RM 在 RLHF 中的工业级实践 |
+| 3 | **"Scaling Laws for Reward Model Overoptimization"** — Gao et al., 2023 ([arXiv:2210.10760](https://arxiv.org/abs/2210.10760)) | 系统研究过优化现象，提出 D_crit 缩放律 |
+| 4 | **"Let's Verify Step by Step"** — Lightman et al., 2023 ([arXiv:2305.20050](https://arxiv.org/abs/2305.20050)) | PRM（过程级奖励），用于数学推理 |
+| 5 | **"Constitutional AI"** — Bai et al., 2022 ([arXiv:2212.08073](https://arxiv.org/abs/2212.08073)) | AI 反馈训练 RM，减少人工 |
+
+---
+
+## 七、实践思考
+
+**三个常见理解误区：**
+
+| 误区 | 正解 |
+|------|------|
+| ❌ "RM 训练准确率越高越好" | ✅ held-out 准确率高不代表 PPO 阶段好用；RM 可能在 OOD 上失效，需分布外评估 |
+| ❌ "RM 数据越多越好" | ✅ 噪点数据有害；5 万对高质量 > 50 万对噪点，标注质量是瓶颈 |
+| ❌ "RM 训练完就固定了" | ✅ PPO 会让策略漂移到 OOD，RM 应定期用新样本更新（online RM）缓解盲区 |

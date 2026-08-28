@@ -1,0 +1,166 @@
+---
+title: "Layer Normalization 与残差连接：为什么深度模型需要它们"
+date: "2026-08-28"
+category: "LLM 深入简述"
+tags: ["LLM", "Transformer", "LayerNorm", "残差连接", "深度学习"]
+description: "Layer Normalization 和残差连接是深度神经网络训练稳定性的两大基石。没有它们，GPT-4 的 120 层结构根本无法收敛。"
+---
+
+## 一、算法概览
+
+**Layer Normalization（层归一化）** 和 **残差连接（Residual Connection）** 是深度神经网络训练稳定性的两大基石。LayerNorm 通过对每个样本的特征维度做标准化，消除内部协变量偏移；残差连接通过 `y = F(x) + x` 的恒等映射，让梯度可以"绕过"非线性层直达底层。两者结合，使得 Transformer 可以堆叠到上百层仍能稳定训练。没有它们，GPT-4 的 120 层结构根本无法收敛。
+
+---
+
+## 二、历史背景与问题起源
+
+### 2.1 梯度消失：深度的诅咒
+
+2015 年之前，深度网络有一个魔咒：**层数越深，训练越难**。根因是反向传播时梯度需要连乘每一层的雅可比矩阵，当层数 > 20 时，梯度要么指数衰减（消失），要么指数爆炸。
+
+He Kaiming 等人在 ResNet（2015）中提出了残差连接，用极其简洁的数学形式解决了这个问题：
+
+```
+y = F(x) + x
+```
+
+其中 `F(x)` 是神经网络层的变换，`x` 是输入。这个 `+x` 看似微不足道，却让梯度有了一条"高速公路"：反向传播时，`∂y/∂x = ∂F/∂x + 1`，那个 `+1` 保证梯度至少不会消失。
+
+### 2.2 内部协变量偏移
+
+即使梯度不消失，深层网络还面临另一个问题：每一层的输入分布会随着前面层参数的更新而不断变化，这被称为 **内部协变量偏移（Internal Covariate Shift）**。这导致：
+
+- 学习率必须设得很小
+- 训练收敛慢
+- 对初始化极其敏感
+
+Batch Normalization（2015）首先解决了这个问题，但它依赖 batch 统计量，在 batch size 小或序列长度可变的场景下表现不佳。于是 Layer Normalization（2016）应运而生——**不依赖 batch，只对单个样本做归一化**，完美适配 NLP 的变长序列场景。
+
+---
+
+## 三、核心原理深入
+
+### 3.1 Layer Normalization 的数学原理
+
+对于隐藏层输出 **h ∈ R^d**（一个 d 维向量），LayerNorm 的计算过程：
+
+```
+μ = (1/d) · Σ h_i           # 计算均值
+σ² = (1/d) · Σ (h_i - μ)²   # 计算方差
+h_i_norm = (h_i - μ) / √(σ² + ε)  # 标准化
+output_i = γ · h_i_norm + β        # 仿射变换
+```
+
+其中 `γ` 和 `β` 是可学习参数，`ε` 是防止除零的小常数（通常 1e-5）。
+
+**关键区别**：BatchNorm 在 batch 维度上做归一化（同一个特征跨样本统计），LayerNorm 在特征维度上做归一化（同一个样本跨特征统计）。
+
+```
+          样本维度 →
+特征维度 ↓  h₁₁  h₁₂  h₁₃    BatchNorm：沿行计算统计量
+          h₂₁  h₂₂  h₂₃    LayerNorm：沿列计算统计量
+          h₃₁  h₃₂  h₃₃
+```
+
+为什么 NLP 选 LayerNorm 而非 BatchNorm？
+
+| 维度 | BatchNorm | LayerNorm |
+|------|-----------|-----------|
+| 依赖 batch size | 是，太小不稳定 | 否，单样本独立 |
+| 序列长度 | 需要固定 | 任意长度 |
+| 推理时行为 | 需维护 running mean | 训练推理一致 |
+| 适用场景 | CNN（图像） | Transformer（文本） |
+
+### 3.2 Pre-Norm vs Post-Norm
+
+原始 Transformer 使用 **Post-Norm**（先残差后归一化）：
+
+```
+output = LayerNorm(x + Sublayer(x))
+```
+
+但现代大模型几乎都改用 **Pre-Norm**（先归一化后残差）：
+
+```
+output = x + Sublayer(LayerNorm(x))
+```
+
+为什么？Post-Norm 中残差路径上有 LayerNorm，梯度仍可能被缩放；Pre-Norm 把 LayerNorm 移到分支内，残差路径是纯粹的恒等映射 `+x`，梯度可以无损传递到最底层。GPT-2 之后的大模型全部采用 Pre-Norm。
+
+### 3.3 残差连接的深层意义
+
+残差连接不仅仅是为了"梯度高速公路"，它还有更深层的设计哲学：
+
+**学习残差而非完整映射**：网络只需学习 `F(x) = y - x`（目标与输入的差值），而非从零学习 `y`。当最优解接近恒等映射时，`F(x) → 0` 远比学习一个恒等映射容易。
+
+**隐式集成**：一个 N 层的 ResNet 可以看作 **2^N 条路径** 的隐式集成——梯度可以选择走或不走每一层的残差分支。研究表明，大多数梯度走的是"短路路径"，少数走"深层路径"，这种多路径结构带来了天然的鲁棒性。
+
+---
+
+## 四、训练流程
+
+在 Transformer 的一个 Block 中，LayerNorm + 残差连接的工作流程：
+
+```
+输入 x
+ │
+ ▼
+LayerNorm(x) ──────────────┐
+ │                         │
+ ▼                         │
+Multi-Head Attention       │
+ │                         │
+ ▼                         │
+ + ←──── x（残差连接）──────┘
+ │
+ ▼ (得到 x')
+ │
+LayerNorm(x') ──────────────┐
+ │                          │
+ ▼                          │
+Feed-Forward Network        │
+ │                          │
+ ▼                          │
+ + ←──── x'（残差连接）─────┘
+ │
+ ▼
+输出
+```
+
+每个 Block 有两次残差连接 + 两次 LayerNorm，保证了信息流和梯度的双向畅通。
+
+---
+
+## 五、与其他算法的关系
+
+| 技术 | 关系 |
+|------|------|
+| **Batch Normalization** | LayerNorm 的"前辈"，CNN 领域仍是主流，但不适合 NLP |
+| **RMSNorm** | LayerNorm 的简化版，去掉中心化只保留缩放，LLaMA/Qwen 在用 |
+| **DeepNorm** | 针对超深网络（1000+层）的改进残差初始化方案 |
+| **Gradient Checkpointing** | 与残差连接正交的内存优化技术，牺牲计算换内存 |
+| **混合精度训练** | LayerNorm 的数值稳定性使其天然兼容 fp16/bf16 |
+
+当前趋势：**RMSNorm 正在取代 LayerNorm**。LLaMA、DeepSeek、Qwen 等主流开源模型均已切换到 RMSNorm，因为它在保持效果的同时减少了约 7-64% 的归一化计算开销。
+
+---
+
+## 六、关键论文
+
+| # | 论文 | 贡献 |
+|---|------|------|
+| 1 | **"Deep Residual Learning for Image Recognition"** — He et al., CVPR 2016 ([arXiv:1512.03385](https://arxiv.org/abs/1512.03385)) | 提出残差连接，使 152 层网络可训练 |
+| 2 | **"Layer Normalization"** — Ba et al., 2016 ([arXiv:1607.06450](https://arxiv.org/abs/1607.06450)) | 提出 LayerNorm，解决 BatchNorm 在 RNN/Transformer 上的局限 |
+| 3 | **"Root Mean Square Layer Normalization"** — Zhang & Sennrich, NeurIPS 2019 ([arXiv:1910.07467](https://arxiv.org/abs/1910.07467)) | 提出 RMSNorm，简化 LayerNorm |
+
+---
+
+## 七、实践思考
+
+**三个常见理解误区：**
+
+| 误区 | 正解 |
+|------|------|
+| ❌ "LayerNorm 是为了提升模型效果" | ✅ LayerNorm 的首要目的是**训练稳定性**，它让 loss landscape 更平滑、收敛更快，而非直接提升上限 |
+| ❌ "残差连接只是梯度技巧，模型大了无所谓" | ✅ 没有残差连接，超过 20 层的网络几乎无法训练。GPT-4 的 120 层结构完全依赖残差路径 |
+| ❌ "Pre-Norm 和 Post-Norm 效果差不多" | ✅ Pre-Norm 让残差路径是纯恒等映射，梯度无损传递；Post-Norm 在残差路径上加了 LayerNorm，深层网络训练明显更难。GPT-2 之后的模型全部用 Pre-Norm |

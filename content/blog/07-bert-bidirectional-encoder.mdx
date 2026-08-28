@@ -1,0 +1,158 @@
+---
+title: "BERT 与双向编码器：为什么现在大模型很少用双向编码器了"
+date: "2026-09-01"
+category: "LLM 深入简述"
+tags: ["LLM", "BERT", "双向编码器", "MLM", "Embedding"]
+description: "理解 BERT 为什么衰落，比单纯背诵它的原理更有价值。但衰落不等于死亡，BERT 在 Embedding 检索等场景仍是王者。"
+---
+
+## 一、算法概览
+
+**BERT（Bidirectional Encoder Representations from Transformers）** 以 **MLM（掩码语言建模）** 为预训练目标，采用纯编码器架构，每个 token 可同时注意左右两侧上下文，实现真正的双向理解。2018 年发布时在 11 项 NLP 基准上刷新纪录，开启预训练范式时代。然而随着 GPT 路线规模化涌现出生成与 in-context learning 能力，BERT 因无法自回归生成、训练信号稀疏、难以规模化，逐渐退出大模型主舞台。但在 **Embedding 检索、文本分类、信息抽取** 等"理解而非生成"的场景，双向编码器仍是首选——它的一次前向编码效率和闭合任务稳定性优于生成式模型。
+
+---
+
+## 二、历史背景与问题起源
+
+### 2.1 BERT 的诞生：双向理解的直觉
+
+2018 年 10 月，Google 发布 BERT。核心动机是当时 GPT-1 用单向语言模型预训练，"预测下一个词"时模型看不见右侧，对理解任务不友好。BERT 的洞察：**理解类任务天然需要双向**——判断"bank"是河岸还是银行，必须看上下文两侧。于是 BERT 用 MLM 让被遮位置同时看到左右，并提出 NSP（Next Sentence Prediction）辅助任务学习句间关系。
+
+### 2.2 巅峰：11 项 SOTA
+
+BERT-base（110M）和 BERT-large（340M）在 GLUE、SQuAD、SWAG 等 11 个基准上全部刷新 SOTA，微调范式迅速成为 NLP 主流。2019-2020 年间，BERT 衍生出 RoBERTa、ALBERT、DeBERTa、DistilBERT 等家族，统治了理解类任务。
+
+### 2.3 衰落的转折：生成与规模化
+
+衰落有三个节点：
+
+- **GPT-2（2019）** 证明 CLM 能 zero-shot 生成，BERT 做不到。
+- **GPT-3（2020）** 涌现 in-context learning，"一个模型通吃"取代"每任务微调"。
+- **RLHF（2022）** 让生成模型对齐人类，对话场景彻底倒向 GPT 路线。
+
+根因：BERT 的双向注意力与自回归生成**架构冲突**——生成时右侧还没产生，无法做双向注意力。这个限制让 BERT 永远无法成为对话模型。
+
+---
+
+## 三、核心原理深入
+
+### 3.1 双向注意力：BERT 的灵魂
+
+BERT 移除了 causal mask，每个位置可注意所有位置：
+
+```
+Attention(Q, K, V) = softmax(Q · K^T / √d_k) · V  # 无掩码
+```
+
+对比 GPT 的 causal mask：
+
+```
+BERT 注意力矩阵（全可见）        GPT 注意力矩阵（下三角）
+[ 1 1 1 1 ]                   [ 1 0 0 0 ]
+[ 1 1 1 1 ]                   [ 1 1 0 0 ]
+[ 1 1 1 1 ]                   [ 1 1 1 0 ]
+[ 1 1 1 1 ]                   [ 1 1 1 1 ]
+```
+
+**意义**：`bank` 的表示融合了左右上下文，是真正的"语境化词向量"。GPT 中 `bank` 只能看左侧，理解滞后。
+
+### 3.2 MLM：掩码语言建模
+
+随机选 15% 的 token，按 80/10/10 比例处理：
+
+```
+80% → [MASK]    The [MASK] sat on the mat
+10% → 随机 token  The dog sat on the mat（原为 cat）
+10% → 保持原样   The cat sat on the mat
+```
+
+**为什么不是 100% [MASK]**？因为微调时输入没有 [MASK]，全用 [MASK] 会造成预训练-微调分布不一致。10% 随机 + 10% 原样是为了让模型学会"任何位置都可能被考"。
+
+**损失**：
+
+```
+L_MLM = -Σ_{i ∈ 被遮位置} log P(x_i | x_被遮掩的上下文)
+```
+
+注意：**只有 15% 的位置参与损失**，85% 的计算被浪费，这是 BERT 训练效率低于 GPT 的根本原因。
+
+### 3.3 NSP 与 RoBERTa 的反思
+
+BERT 的辅助任务 **NSP**：给两个句子，判断是否相邻。RoBERTa（2019）发现 NSP 其实没用——去掉 NSP、增大 batch、用更多数据，效果反而更好。这揭示了一个教训：BERT 原论文的某些设计并非最优，社区后续优化（RoBERTa、DeBERTa）才榨干了 MLM 的潜力。
+
+### 3.4 为什么不能生成
+
+这是 BERT 衰落的核心。生成需要自回归：
+
+```
+P(x_1, ..., x_n) = Π P(x_i | x_{<i})  # 必须单向
+```
+
+但 BERT 的表示是双向的，位置 i 的隐藏状态 h_i 已经"偷看"了右侧 token。如果用 h_i 预测 x_i，模型实际上是在作弊（右侧信息泄露）。解决方案有两条：
+
+- **迭代解码**（如 XLNet、BERT-aware decoding）：反复 refine，但极慢。
+- **改造为 seq2seq**（如 MASS、BART）：编码器双向 + 解码器单向，但这已经不再是"纯双向编码器"。
+
+**结论**：纯双向编码器与自回归生成架构层面不兼容，这是 BERT 路线的死穴。
+
+---
+
+## 四、训练/推理流程
+
+**预训练流程**：
+
+```
+1. 语料 → 分词 → 构造句对（A, B）
+2. 动态掩码：每个 batch 随机选 15% 位置掩码
+3. 前向：双向自注意力
+4. 损失：MLM 损失 + （可选）NSP 损失
+5. 优化：AdamW + warmup + linear decay
+```
+
+**微调流程**（下游任务）：
+
+```
+1. 在 [CLS] 位置接分类头（分类任务）
+2. 或在每个 token 位置接 CRF/MLP（序列标注）
+3. 端到端微调所有参数
+```
+
+**推理流程**：一次前向即可编码整个输入，**无需自回归**，这是 BERT 在检索/分类场景速度优势的来源。
+
+---
+
+## 五、与其他算法的关系
+
+| 技术 | 关系 |
+|------|------|
+| **GPT** | 同期对手，单向 vs 双向，最终 GPT 路线胜出 |
+| **RoBERTa** | BERT 的"去 NSP + 大数据 + 大 batch"优化版 |
+| **DeBERTa** | 解耦注意力（disentangled attention），BERT 家族最强 |
+| **BART/T5** | 编码-解码，把双向理解与自回归生成结合 |
+| **Sentence-BERT** | BERT 的孪生变体，用于 Embedding 检索 |
+| **Encoder-Decoder（T5/BART）** | 折中方案，但参数效率不如纯解码器 |
+
+**趋势**：大模型主战场已无纯双向编码器的位置，但 **Embedding 模型**（如 BGE、E5）仍基于编码器架构——检索场景的一次前向效率是生成模型无法比拟的。
+
+---
+
+## 六、关键论文
+
+| # | 论文 | 贡献 |
+|---|------|------|
+| 1 | **"BERT: Pre-training of Deep Bidirectional Transformers"** — Devlin et al., NAACL 2019 ([arXiv:1810.04805](https://arxiv.org/abs/1810.04805)) | 提出 MLM + 双向编码器范式 |
+| 2 | **"RoBERTa: A Robustly Optimized BERT Pretraining Approach"** — Liu et al., 2019 ([arXiv:1907.11692](https://arxiv.org/abs/1907.11692)) | 证明 NSP 无用，优化 BERT 训练配方 |
+| 3 | **"DeBERTa: Decoding-enhanced BERT with Disentangled Attention"** — He et al., ICLR 2021 ([arXiv:2006.03654](https://arxiv.org/abs/2006.03654)) | 解耦注意力，BERT 家族 SOTA |
+| 4 | **"Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks"** — Reimers & Gurevych, EMNLP 2019 ([arXiv:1908.10084](https://arxiv.org/abs/1908.10084)) | 把 BERT 改造为 Embedding 模型 |
+
+---
+
+## 七、实践思考
+
+**三个常见理解误区：**
+
+| 误区 | 正解 |
+|------|------|
+| ❌ "BERT 被淘汰了，没用了" | ✅ BERT 退出了大模型主战场，但在 Embedding 检索、分类、抽取等理解任务上仍是 SOTA 性价比选择 |
+| ❌ "双向一定比单向理解好" | ✅ 大规模 CLM 通过 in-context learning 展现的"生成式理解"已追平甚至超越 BERT，纯架构优势被规模化抹平 |
+| ❌ "BERT 不能用是因为参数小" | ✅ 根因是**架构与生成不兼容**，即使把 BERT 放大到 175B 也无法做对话——双向注意力无法自回归生成 |

@@ -1,0 +1,139 @@
+---
+title: "Tokenization：BPE、WordPiece、SentencePiece 的原理与差异"
+date: "2026-08-29"
+category: "LLM 深入简述"
+tags: ["LLM", "Tokenization", "BPE", "WordPiece", "SentencePiece"]
+description: "Tokenization 是把原始字符串切分为模型可处理的最小单元的过程。三大主流算法共享'从字符出发、按统计合并'的核心思想，但在合并准则、语言无关性上差异显著。"
+---
+
+## 一、算法概览
+
+**Tokenization（分词）** 是把原始字符串切分为模型可处理的最小单元（token）的过程。现代大模型几乎都采用 **子词分词（subword tokenization）**：在"整词"和"字符"之间取得平衡，高频词保留整体，低频词拆成有意义的片段。三大主流算法——**BPE**、**WordPiece**、**SentencePiece**——共享"从字符出发、按统计合并"的核心思想，但在合并准则、语言无关性和实现细节上差异显著。GPT 系列用 BPE，BERT 用 WordPiece，LLaMA/T5 用 SentencePiece。
+
+---
+
+## 二、历史背景与问题起源
+
+### 2.1 三种极端方案各有死穴
+
+早期 NLP 有三种朴素分词方案，各有硬伤：
+
+- **字符级（char-level）**：词表仅几百个，无 OOV，但序列长度爆炸——"hello" 变成 5 个 token，模型要学 `h`+`e`+`l`+`l`+`o` 才知道是"你好"，学习信号极稀疏。
+- **词级（word-level）**：语义直观，但词表动辄几十万，且遇到训练时没见过的词（OOV）只能映射为 `<UNK>`，泛化能力差。
+- **字符 n-gram**：介于两者之间，但缺乏语义边界感。
+
+### 2.2 子词的诞生
+
+2015-2016 年，Sennrich 等人提出 **BPE（Byte Pair Encoding）**，原本是 1994 年的数据压缩算法，被借用到了 NLP。核心洞察：**高频词应整体保留，低频词用更小的子词组合表达**。例如 "tokenization" 可以拆成 `token` + `ization`，既不丢语义，又避免了 OOV。
+
+随后 Schuster 等人在 2012 年提出 **WordPiece**，被 BERT 采用；Google 的 **SentencePiece**（2018）则把 BPE/Unigram 做成了语言无关的工程框架，直接处理原始字节流，无需预分词。三者构成了现代分词的版图。
+
+---
+
+## 三、核心原理深入
+
+### 3.1 BPE：贪心合并最高频字节对
+
+**BPE（Byte Pair Encoding）** 的训练逻辑极其简洁：从字符出发，反复合并语料中出现频率最高的相邻 token 对。
+
+```
+初始词表：所有字符 {a, b, c, ..., z, ...}
+重复直到词表达到目标大小 V：
+  1. 统计语料中所有相邻 token 对的出现次数
+  2. 选出频次最高的对 (A, B)
+  3. 合并为新 token AB，更新所有词
+  4. 将 AB 加入词表
+```
+
+举例：语料中有 `low` 出现 5 次、`lower` 出现 2 次、`lowest` 出现 2 次。初始拆成字符后，`l·o` 出现 9 次最高，合并为 `lo`；接着 `lo·w` 出现 9 次合并为 `low`。最终 `low` 成为一个 token，而 `est`、`er` 作为后缀单独学习。
+
+**推理（编码）**：对未知词，按训练时学到的合并规则从左到右贪心应用，尽量合并出最长的已知子词。复杂度 **O(n·V)**（n 为词表大小）。
+
+### 3.2 WordPiece：似然最大化而非频次
+
+**WordPiece** 与 BPE 形式相似，但合并准则不同。BPE 选频次最高的对，WordPiece 选"能使语言模型似然提升最大"的对：
+
+```
+score(A, B) = count(AB) / (count(A) · count(B))
+```
+
+即合并后的频次除以两个子词各自频次的乘积。这个分数类似于 **PMI（点互信息）**——衡量 A、B 共现是否显著超出独立假设。频次高但各自也很常见的对（如 `th`+`e`）分数不一定高，而真正"绑定"的片段（如 `tion`）会优先合并。
+
+**差异要点**：BPE 是贪心频次，WordPiece 是贪心似然；WordPiece 用 `##` 前缀标记非词首子词（如 `##ing`），BERT 词表里随处可见。
+
+### 3.3 SentencePiece：语言无关的工程框架
+
+**SentencePiece** 的关键贡献不是新算法，而是工程范式：
+
+- **直接处理原始 Unicode/字节流**，不依赖空格预分词，对中文、日文等"无空格语言"原生友好。
+- **将空格也编码为普通字符**（用特殊符号 `▁` 表示），分词与复原完全可逆。
+- **支持两种算法**：BPE 模式和 **Unigram Language Model** 模式。
+
+**Unigram LM** 是 SentencePiece 独有的方案：先初始化一个大词表，然后基于 Unigram 语言模型计算每个子词的概率，**迭代删除使总似然下降最小的子词**，直到词表缩小到目标大小。与 BPE 的"自底向上合并"相反，Unigram 是"自顶向下剪枝"，且对同一输入能产生多个候选分词，推理时取最大概率路径。
+
+```
+P(sentence) = Π P(subword_i)   # Unigram 假设独立
+编码：argmax_切分 P(切分 | sentence)
+```
+
+---
+
+## 四、训练/推理流程
+
+**训练流程**（以 BPE 为例）：
+
+```
+1. 预处理语料 → 按空格切词 → 统计词频
+2. 每个词拆成字符序列，末尾加结束符 </w>
+3. 循环：统计相邻对频次 → 合并最高频对 → 更新词表
+4. 直到词表达到 V（如 50k）或无对可合并
+5. 保存合并规则表（merges.txt）和词表（vocab.json）
+```
+
+**推理流程**：
+
+```
+1. 输入文本 → 按空格切词
+2. 每个词拆成字符
+3. 按 merges 顺序应用合并规则（BPE）/ 概率最大路径（Unigram）
+4. 映射为词表中的 token id
+```
+
+**特殊 token**：`<BOS>`、`<EOS>`、`<PAD>`、`<UNK>` 需手工预留。GPT-2 的 BPE 还有一个关键设计——**byte-level BPE**：先把字符映射到 256 个字节，再在字节层面做 BPE，彻底消灭 OOV。
+
+---
+
+## 五、与其他算法的关系
+
+| 技术 | 关系 |
+|------|------|
+| **WordPiece** | BPE 的"似然版"变体，BERT 系列专用 |
+| **Unigram LM** | SentencePiece 的另一种模式，T5/LLaMA 在用，概率框架更优雅 |
+| **Byte-level BPE** | GPT-2/3 的选择，在字节层操作，彻底无 OOV |
+| **Tiktoken** | OpenAI 开源的高效 BPE 实现，用于 GPT-3.5/4，比 HuggingFace 快 3-6 倍 |
+| **Qwen-tokenizer** | 融合 BPE + 词表扩展，中文压缩率显著优于纯 BPE |
+
+**趋势**：现代大模型越来越重视 tokenizer 的压缩率。同样一句中文，LLaMA 的 SentencePiece 可能切 20 个 token，Qwen 优化后只需 12 个——这意味着同样推理预算下能处理更长上下文。tokenizer 的"性价比"正成为模型选型的硬指标。
+
+---
+
+## 六、关键论文
+
+| # | 论文 | 贡献 |
+|---|------|------|
+| 1 | **"Neural Machine Translation of Rare Words with Subword Units"** — Sennrich et al., ACL 2016 ([arXiv:1508.07909](https://arxiv.org/abs/1508.07909)) | 将 BPE 引入 NLP，奠定子词分词范式 |
+| 2 | **"Japanese and Korean Voice Search"** — Schuster & Nakajima, ICASSP 2012 | 提出 WordPiece 算法，后被 BERT 采用 |
+| 3 | **"SentencePiece: A simple and language independent subword tokenizer"** — Kudo & Richardson, 2018 ([arXiv:1808.06226](https://arxiv.org/abs/1808.06226)) | 提出 SentencePiece 框架，支持 BPE/Unigram |
+| 4 | **"Language Models are Unsupervised Multitask Learners"** — Radford et al., 2019 | GPT-2 引入 byte-level BPE，彻底消灭 OOV |
+
+---
+
+## 七、实践思考
+
+**三个常见理解误区：**
+
+| 误区 | 正解 |
+|------|------|
+| ❌ "tokenizer 越细越好，避免 OOV" | ✅ 过细会导致序列变长、注意力计算量 O(n²) 膨胀，压缩率与粒度需权衡 |
+| ❌ "BPE 和 WordPiece 本质一样" | ✅ 合并准则不同：BPE 看频次，WordPiece 看似然增益（类 PMI），低频但高绑定的片段 WordPiece 更敏感 |
+| ❌ "换 tokenizer 只需重训词表" | ✅ 换 tokenizer 等于改变输入分布，必须**从头预训练**或至少大量继续预训练，微调远远不够 |
