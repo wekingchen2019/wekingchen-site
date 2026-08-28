@@ -12,7 +12,40 @@ const projects: Record<string, {
   architecture: string;
   highlights: string[];
   techStack: string[];
+  blogLink?: string;
 }> = {
+  cvrptw: {
+    title: "CVRPTW 物流排车优化",
+    description: "基于 OR-Tools 的物流排车算法，替代人工排车，年节省千万",
+    tags: ["OR-Tools", "运筹优化", "CVRPTW", "算法落地"],
+    status: "已上线",
+    motivation: "传统人工排车效率低、成本高，且难以应对复杂约束（时间窗、车辆容量、多配送点）。通过运筹优化算法自动化排车决策，在满足所有约束的前提下最小化物流总成本。",
+    architecture: "基于 Google OR-Tools 的 CVRPTW 求解器，支持多约束条件（时间窗、载重、里程）、动态调度、多车型混合配送。",
+    highlights: [
+      "覆盖带时间窗的车辆路径问题（CVRPTW）",
+      "支持多约束条件：载重、时间窗、里程、多车型",
+      "替代人工排车，年节省物流费用千万以上",
+      "动态调度能力，支持实时订单插入",
+    ],
+    techStack: ["Python", "Google OR-Tools", "CVRPTW", "运筹优化"],
+    blogLink: "/blog/cvrptw-logistics-routing",
+  },
+  "dify-store-agent": {
+    title: "门店智能导购 Agent",
+    description: "基于 Dify 的门店智能商品介绍与咨询系统",
+    tags: ["Dify", "LLM", "RAG", "Agent"],
+    status: "已上线",
+    motivation: "门店场景需要快速、准确的商品介绍与咨询能力，传统人工培训成本高且标准不一。通过 LLM + RAG 构建智能导购 Agent，实现商品知识的自动化服务。",
+    architecture: "Dify 平台搭建 LLM 应用 API + 自定义前端。RAG 知识库承载商品信息，多轮对话流程处理复杂咨询场景。",
+    highlights: [
+      "基于 Dify 快速搭建 LLM 应用 API",
+      "RAG 知识库承载商品信息，支持精准检索",
+      "自定义前端，适配门店交互场景",
+      "多轮对话流程，处理复杂咨询需求",
+    ],
+    techStack: ["Dify", "LLM", "RAG", "API", "前端开发"],
+    blogLink: "/blog/dify-llm-store-guide",
+  },
   foresight: {
     title: "Foresight",
     description: "基于可信度加权的股票预测平台",
@@ -148,6 +181,17 @@ export default async function ProjectDetail({ params }: Props) {
             ))}
           </div>
         </section>
+
+        {project.blogLink && (
+          <section>
+            <a
+              href={project.blogLink}
+              className="inline-flex items-center gap-2 text-primary hover:underline"
+            >
+              阅读完整文章 →
+            </a>
+          </section>
+        )}
       </div>
     </div>
   );

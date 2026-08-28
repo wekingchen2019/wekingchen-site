@@ -45,27 +45,6 @@ export default function AboutPage() {
         <SkillRadar />
       </section>
 
-      {/* Projects */}
-      <section className="mb-16">
-        <h2 className="text-xl font-semibold mb-6">项目</h2>
-        <div className="space-y-6">
-          <a href="/blog/cvrptw-logistics-routing" className="block rounded-lg border bg-card p-6 transition-colors hover:bg-accent/50">
-            <h3 className="font-semibold text-lg mb-2">CVRPTW 物流排车优化</h3>
-            <p className="text-muted-foreground text-sm leading-relaxed">
-              基于 Google OR-Tools 自研物流排车算法，替代人工排车，年节省物流费用千万以上。
-            </p>
-            <span className="inline-block mt-3 text-xs text-primary">阅读全文 →</span>
-          </a>
-          <a href="/blog/dify-llm-store-guide" className="block rounded-lg border bg-card p-6 transition-colors hover:bg-accent/50">
-            <h3 className="font-semibold text-lg mb-2">门店智能导购 Agent</h3>
-            <p className="text-muted-foreground text-sm leading-relaxed">
-              基于 Dify 快速构建 LLM 应用 API 并自定义前端，实现门店智能商品介绍与咨询。
-            </p>
-            <span className="inline-block mt-3 text-xs text-primary">阅读全文 →</span>
-          </a>
-        </div>
-      </section>
-
       {/* Contact */}
       <section>
         <h2 className="text-xl font-semibold mb-4">联系</h2>

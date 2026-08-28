@@ -8,6 +8,20 @@ export const metadata: Metadata = {
 
 const projects: Project[] = [
   {
+    slug: "cvrptw",
+    title: "CVRPTW 物流排车优化",
+    description: "基于 Google OR-Tools 自研物流排车算法，替代人工排车，年节省物流费用千万以上。覆盖带时间窗的车辆路径问题（CVRPTW），支持多约束条件、动态调度。",
+    tags: ["OR-Tools", "运筹优化", "CVRPTW", "算法落地"],
+    status: "已上线",
+  },
+  {
+    slug: "dify-store-agent",
+    title: "门店智能导购 Agent",
+    description: "基于 Dify 快速构建 LLM 应用 API 并自定义前端，实现门店智能商品介绍与咨询。从 RAG 知识库搭建到多轮对话流程，端到端交付。",
+    tags: ["Dify", "LLM", "RAG", "Agent"],
+    status: "已上线",
+  },
+  {
     slug: "foresight",
     title: "Foresight",
     description: "基于可信度加权的股票预测平台。借鉴 Ray Dalio「可信度加权创意择优」思想，透明追踪每位预测者的准确性，用数据建立可信度。支持结构化预测提交、三级排行榜（全局/个股/行业）、自动验证、实时行情。完整 AI Native 项目，从算法设计到小程序端独立交付。",
