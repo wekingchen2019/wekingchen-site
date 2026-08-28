@@ -49,20 +49,22 @@ export default function AboutPage() {
       <section className="mb-16">
         <h2 className="text-xl font-semibold mb-6">项目</h2>
         <div className="space-y-6">
-          <div className="rounded-lg border bg-card p-6">
+          <a href="/blog/fengniao-risk-engine" className="block rounded-lg border bg-card p-6 transition-colors hover:bg-accent/50">
             <h3 className="font-semibold text-lg mb-2">蜂鸟风控引擎</h3>
             <p className="text-muted-foreground text-sm leading-relaxed">
               风控决策引擎，从0到1搭建，覆盖信贷全生命周期。集规则引擎、模型决策、
               实时特征计算于一体，支撑日均千万级风控决策请求。
             </p>
-          </div>
-          <div className="rounded-lg border bg-card p-6">
+            <span className="inline-block mt-3 text-xs text-primary">阅读全文 →</span>
+          </a>
+          <a href="/blog/six-dimensions-exponential-growth" className="block rounded-lg border bg-card p-6 transition-colors hover:bg-accent/50">
             <h3 className="font-semibold text-lg mb-2">增长引擎</h3>
             <p className="text-muted-foreground text-sm leading-relaxed">
               量化增长评价体系，从财务指标和股价行为中提取六个维度的结构性得分，
               用于评估企业增长质量与可持续性。
             </p>
-          </div>
+            <span className="inline-block mt-3 text-xs text-primary">阅读全文 →</span>
+          </a>
         </div>
       </section>
 
