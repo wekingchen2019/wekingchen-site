@@ -1,0 +1,140 @@
+---
+title: "KV Cache：推理加速的核心技术"
+date: "2026-09-01"
+category: "LLM 深入简述"
+tags: ["KV Cache", "推理优化", "PagedAttention", "GQA", "LLM深入简述"]
+description: "自回归生成时，前 n-1 个 token 的 K、V 矩阵没变化，重算就是浪费。KV Cache 把每层每头的 K、V 存下来复用，让每步推理复杂度从 O(n²) 降到 O(n)。"
+---
+
+# 17 KV Cache：推理加速的核心技术
+
+> 自回归生成第 `n` 个 token 时，前 `n-1` 个 token 的 K、V 矩阵没变化，重算就是浪费。**KV Cache** 把每层每头的 K、V 存下来复用，让每步推理复杂度从 **O(n²)** 降到 **O(n)**。这是大模型推理服务能跑起来的地基——没有 KV Cache，Llama 70B 生成 4K 文本要数小时。但 KV Cache 自身显存巨大，催生了 PagedAttention、MQA/GQA、KV 量化等一系列技术。理解 KV Cache 是理解一切推理优化的前提。
+
+---
+
+## 一、算法概览
+
+**KV Cache** 是 Transformer 自回归推理的关键优化：缓存已生成 token 的 Key 和 Value 张量，避免每生成一个新 token 就重算全部历史的 K/V。它把每步推理的计算复杂度从 **O(n²)** 降到 **O(n)**，是大模型推理服务（vLLM、TensorRT-LLM、SGLang）的基石。代价是显存占用随序列长度线性增长——长上下文场景下 KV Cache 甚至比模型权重还大，于是衍生出 PagedAttention（分页管理）、MQA/GQA（结构压缩）、KV 量化（精度压缩）等配套技术。
+
+---
+
+## 二、历史背景与问题起源
+
+### 2.1 自回归推理的重复计算问题
+
+Transformer 原始论文（2017）本身没强调 KV Cache，因为当时主要做编码或短序列。当 GPT 系列把自回归生成推向长文本，问题暴露：生成第 `t` 个 token 时，标准 attention 要对前 `t-1` 个 token 重算 Q/K/V，但前面 token 的 K、V 并未变化——这是巨大的重复计算。生成 4K 文本时，总计算量是 **O(n³·d)** 级别，不可接受。
+
+### 2.2 缓存思想成为工业标准
+
+KV Cache 的思想——把每层的 K/V 存下来复用——在 2019-2020 年推理框架（FasterTransformer、TurboTransformers）中开始系统实现，成为工业标准。但 KV Cache 本身又带来新问题：显存占用巨大、batch 内不同请求长度不一导致碎片。
+
+### 2.3 PagedAttention 革命
+
+2023 年 vLLM 团队提出 **PagedAttention**，借鉴操作系统分页机制，把 KV Cache 切成固定大小 block，消除碎片、支持动态 batch，让 vLLM 吞吐比 HuggingFace 高 24 倍。同期 GQA（Llama 2 70B）、KV 量化（SKVAQ）等结构化压缩技术也逐步成熟，构成现代大模型推理优化的完整工具链。
+
+---
+
+## 三、核心原理深入
+
+### 3.1 直观类比：读书做笔记
+
+你看一本书逐字阅读做笔记，每读一个新字不需要从头重读前面所有字——前面的理解（笔记）已经在脑子里了。KV Cache 就是 Transformer 的"笔记"。每生成一个 token，只需要把新 token 的 K/V 追加到笔记，然后让新 token 的 Q 去查询整本笔记。
+
+### 3.2 标准 Attention 的问题
+
+标准自注意力计算：
+
+```
+Q = X · W_Q  # X 是所有 token 的 embedding
+K = X · W_K
+V = X · W_V
+Attn = softmax(Q · K^T / √d_k) · V
+```
+
+生成第 `t` 个 token 时，输入 `X` 包含所有已生成 token。`Q` 只有最新 token 的部分是"新"的，但 `K` 和 `V` 中前面 token 的部分每步都一样——重复计算。生成 `n` 个 token 总开销 **O(n²·d)**。
+
+### 3.3 KV Cache 策略
+
+**1. Prefill 阶段**：处理 prompt，一次性计算并缓存所有 prompt token 的 K、V（每层、每头单独存）。
+
+**2. Decode 阶段**：每生成一个新 token，只计算新 token 的 Q/K/V，把新 K/V 追加到 Cache，然后做一次 attention（新 Q 对全部历史 K/V）。每步计算量降到 **O(n·d)**。
+
+### 3.4 显存占用：真正的瓶颈
+
+对于 `L` 层、`H` 头、`d_head` 维度、序列长度 `n`、batch `B`、FP16（2 字节）：
+
+```
+M_KV = 2 · L · H · d_head · n · B · 2 bytes
+       ↑   ↑   ↑           ↑   ↑   ↑
+       K,V  层  头          序列 batch FP16
+```
+
+以 **Llama 2 70B**（`L=80, H=64, d_head=128`）为例：单条 4K 上下文的 KV Cache 约 **5 GB**；batch 32 就 **160 GB**——比模型权重（140GB）还大。这就是为什么 KV Cache 是长上下文推理的第一瓶颈。
+
+### 3.5 配套优化技术
+
+**1. PagedAttention（vLLM）**：把 KV Cache 切成固定大小 block（如 16 token 一块），用 block table 管理逻辑→物理映射，类似操作系统虚拟内存分页。消除碎片，让 batch 内不同长度请求灵活共享显存，配合 Continuous Batching 实现高吞吐。
+
+**2. MQA / GQA**：从模型结构减小 KV Cache。
+
+- **MQA（Multi-Query Attention）**：所有 Q 头共享同一组 K/V，KV Cache 减小 `H` 倍，但质量略降。
+- **GQA（Grouped-Query Attention）**：Q 头分组，每组共享一组 K/V，质量与 MHA 接近、KV Cache 减小 `H/g` 倍。Llama 2 70B、Llama 3 均采用 GQA。
+
+**3. KV Cache 量化**：把 FP16 的 K/V 量化到 INT8 甚至 INT4，显存减半乃至 1/4。需注意 K 中存在 outlier 通道，要用混合精度或分组量化。
+
+**4. Offload**：把不活跃的 KV Cache 换出到 CPU/SSD，长上下文场景节省 GPU 显存。
+
+---
+
+## 四、训练/推理流程
+
+**训练**：KV Cache 一般**不参与训练**。训练用 teacher forcing 一次前向所有 token（并行），Cache 反而增加显存开销与计算开销。Flash Attention 等技术专门优化训练阶段的 attention 计算。
+
+**推理**：分 **Prefill** 与 **Decode** 两阶段。Prefill 是 compute-bound，主要算 attention 一次性算出 prompt 的 KV；Decode 是 memory-bound，每步只搬少量权重和 KV Cache，但反复访问大显存，吞吐瓶颈在显存带宽。**Continuous Batching** 是关键调度策略：新请求随时插入已完成 prefill 的 batch，旧请求完成就退出，GPU 利用率显著提升。
+
+---
+
+## 五、与其他算法的关系
+
+- **与 Flash Attention**：Flash Attention 加速单步 attention 计算，KV Cache 加速跨步复用，二者正交可叠加。推理框架通常联合使用。
+- **与 PagedAttention**：PagedAttention 是 KV Cache 的显存管理方案，是 KV Cache 的工程化延伸。
+- **与 MQA/GQA**：从模型结构上减小 KV Cache，与 KV Cache 是互补关系——结构压缩+缓存复用。
+- **与 Speculative Decoding**：投机解码用 draft model 一次预测多 token，需要正确维护 KV Cache 的"回滚"——拒绝位置之后的 K/V 必须丢弃。
+- **与 Quantization**：KV Cache 量化是模型权重量化之外的独立优化点，可同时启用。
+- **与 Ring Attention / Sequence Parallelism**：长序列训练时也涉及 K/V 的分布式缓存。
+
+---
+
+## 六、关键论文与引用
+
+| 论文 | 年份 | 核心贡献 | 链接 |
+| --- | --- | --- | --- |
+| Attention Is All You Need | 2017 | Transformer 原始结构 | https://arxiv.org/abs/1706.03762 |
+| Fast Transformer Decoding (MQA) | 2019 | Multi-Query Attention | https://arxiv.org/abs/1911.02150 |
+| FasterTransformer | 2020 | KV Cache 工程实现 | NVIDIA 开源 |
+| GQA (Grouped-Query Attention) | 2023 | GQA 折中方案 | https://arxiv.org/abs/2305.13245 |
+| vLLM / PagedAttention | 2023 | 分页式 KV Cache 管理 | https://arxiv.org/abs/2309.06180 |
+| Efficient Generative LLM Inference (综述) | 2024 | KV Cache 综述 | https://arxiv.org/abs/2404.14265 |
+| KV Cache 量化 (KIVI/QServe) | 2024 | KV 量化到 2/4 bit | https://arxiv.org/abs/2402.02750 |
+
+---
+
+## 七、实践思考（Leader 视角）
+
+作为 Leader，KV Cache 是我评估推理服务的**第一指标**。一个常见错误是只盯着模型参数算显存，忽略 KV Cache 在长上下文场景会反超。72B 模型权重约 144GB（FP16），但 32K 上下文 batch 8 的 KV Cache 又要 100+ GB，整体轻松超出 8 卡 H100 显存。优化顺序应是：**先用 GQA 从结构减 KV → 再用 PagedAttention 提显存利用率 → 最后量化 KV Cache**。这三步组合，长上下文吞吐可提升 5-10 倍。监控指标要看 KV Cache 利用率、prefill/decode 时间比、batch 内 padding 比例。
+
+**常见误区**：
+
+| 误区 | 事实 |
+| --- | --- |
+| KV Cache 让推理更快 | 它让"每步更快"，但单步访存压力更大 |
+| 上下文越长越好 | KV Cache 显存线性增长，长上下文成本高 |
+| 训练也用 KV Cache | 训练并行处理，Cache 反而拖累 |
+| MQA 无损省显存 | MQA 质量略降，GQA 才是接近无损的折中 |
+| batch 越大吞吐越高 | KV Cache 限制下，batch 上限由显存决定 |
+
+---
+
+## 下期预告
+
+下一篇：**18 — Flash Attention：IO-Aware 的注意力计算优化**。我们将看到如何通过分块计算和重计算，把 attention 的 HBM 访问量从 **O(n²·d)** 降到 **O(n²·d/M)**（`M` 是 SRAM 大小），在数值精确不变的情况下实现 2-4 倍加速，成为训练与推理的事实标准。
