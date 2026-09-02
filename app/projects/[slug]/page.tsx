@@ -13,6 +13,7 @@ const projects: Record<string, {
   highlights: string[];
   techStack: string[];
   blogLink?: string;
+  image?: string;
 }> = {
   cvrptw: {
     title: "CVRPTW 物流排车优化",
@@ -44,6 +45,7 @@ const projects: Record<string, {
       "多轮对话流程，处理复杂咨询需求",
     ],
     techStack: ["Dify", "LLM", "RAG", "API", "前端开发"],
+    image: "/dify-store-agent.png",
     blogLink: "/blog/dify-llm-store-guide",
   },
   foresight: {
@@ -142,6 +144,17 @@ export default async function ProjectDetail({ params }: Props) {
       </header>
 
       <div className="space-y-12">
+        {project.image && (
+          <section>
+            <h2 className="text-xl font-semibold mb-3">项目截图</h2>
+            <img
+              src={project.image}
+              alt={project.title}
+              className="w-full rounded-lg border border-border/50"
+            />
+          </section>
+        )}
+
         <section>
           <h2 className="text-xl font-semibold mb-3">为什么做这个</h2>
           <p className="text-muted-foreground leading-relaxed">
